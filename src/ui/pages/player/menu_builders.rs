@@ -129,8 +129,8 @@ impl PlayerPage {
             let limit = Self::MAX_DELAY_MS as f64;
             let spin = gtk::SpinButton::with_range(-limit, limit, 50.0);
             spin.set_digits(0);
-            // Only digits and a minus sign can be typed
-            spin.set_numeric(true);
+            // Adjusted with the +/- buttons, arrow keys or scrolling, not by typing
+            spin.set_editable(false);
             spin.set_value(0.0);
             let sender = sender.clone();
             spin.connect_value_changed(move |spin| {
@@ -165,6 +165,21 @@ impl PlayerPage {
 
         let popover = gtk::Popover::new();
         popover.set_child(Some(&grid));
+
+        // The popover is its own surface, so the player's shortcuts don't see
+        // its keys; keep space for pausing and resuming here too
+        let space_controller = gtk::EventControllerKey::new();
+        space_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let space_sender = sender.clone();
+        space_controller.connect_key_pressed(move |_, key, _, _| {
+            if key == gtk::gdk::Key::space {
+                space_sender.input(PlayerInput::PlayPause);
+                glib::Propagation::Stop
+            } else {
+                glib::Propagation::Proceed
+            }
+        });
+        popover.add_controller(space_controller);
         Self::track_popover_visibility(&popover, popover_count);
 
         let sync_menu_button = gtk::MenuButton::new();

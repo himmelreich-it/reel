@@ -860,9 +860,8 @@ impl AsyncComponent for PlayerPage {
             key_controller.connect_key_pressed(move |_controller, key, _keycode, modifiers| {
                 use gtk::gdk::ModifierType;
 
-                // An open popover (track menus, sync spin buttons) gets the keys,
-                // except space, which always pauses and resumes
-                if *popover_count.borrow() > 0 && key != gtk::gdk::Key::space {
+                // An open popover (track menus, sync spin buttons) gets the keys
+                if *popover_count.borrow() > 0 {
                     return glib::Propagation::Proceed;
                 }
 
