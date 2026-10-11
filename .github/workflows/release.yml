@@ -162,7 +162,7 @@ jobs:
           ## System Requirements
           - GTK4 and libadwaita
           - GStreamer with common plugins
-          - 64-bit operating system
+          - Linux on x86_64 or ARM64 (aarch64)
           RELEASE_BODY
 
       - name: Create Release

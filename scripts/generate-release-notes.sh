@@ -50,10 +50,7 @@ IMPORTANT: Output ONLY the release notes in the exact format below. Do NOT inclu
 - [Technical changes, refactoring, code quality improvements]
 [Group these under Internal Changes, not features]
 
-## System Requirements
-- GTK4 and libadwaita
-- GStreamer with common plugins
-- 64-bit operating system
+Do NOT add download, installation or system requirements sections; the release workflow appends those.
 
 Guidelines:
 1. Use bold (**text**) for feature/fix names
