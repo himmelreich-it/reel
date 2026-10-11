@@ -19,6 +19,8 @@ echo "Current version: $CURRENT_VERSION"
 IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
 
 # Determine version bump type (default: patch)
+# "hit" keeps the upstream version and tags the next fork release on top of it:
+# v<version>-hit.1, v<version>-hit.2, ...
 BUMP_TYPE="${1:-patch}"
 
 case "$BUMP_TYPE" in
@@ -34,23 +36,33 @@ case "$BUMP_TYPE" in
     NEW_PATCH=$((PATCH + 1))
     NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
     ;;
+  hit)
+    NEW_VERSION="$CURRENT_VERSION"
+    git fetch --tags origin
+    LAST_HIT=$(git tag -l "v$CURRENT_VERSION-hit.*" | sed "s/^v$CURRENT_VERSION-hit\.//" | sort -n | tail -1)
+    NEW_TAG="v$CURRENT_VERSION-hit.$((${LAST_HIT:-0} + 1))"
+    ;;
   *)
-    echo "Error: Invalid bump type. Use 'major', 'minor', or 'patch'."
+    echo "Error: Invalid bump type. Use 'major', 'minor', 'patch' or 'hit'."
     exit 1
     ;;
 esac
 
+NEW_TAG="${NEW_TAG:-v$NEW_VERSION}"
 echo "New version: $NEW_VERSION"
+echo "New tag: $NEW_TAG"
 echo ""
 
-# Update version in Cargo.toml
-echo "Updating Cargo.toml..."
-sed -i.bak "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
-rm Cargo.toml.bak
+if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
+  # Update version in Cargo.toml
+  echo "Updating Cargo.toml..."
+  sed -i.bak "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" Cargo.toml
+  rm Cargo.toml.bak
 
-# Update Cargo.lock
-echo "Updating Cargo.lock..."
-cargo update --package reel
+  # Update Cargo.lock
+  echo "Updating Cargo.lock..."
+  cargo update --package reel
+fi
 
 # Run tests to ensure everything still works
 echo "Running tests..."
@@ -60,10 +72,12 @@ cargo test
 echo "Building project..."
 cargo build --release
 
-# Commit version bump
-echo "Creating release commit..."
-git add Cargo.toml Cargo.lock
-git commit -m "chore: release v$NEW_VERSION"
+if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
+  # Commit version bump
+  echo "Creating release commit..."
+  git add Cargo.toml Cargo.lock
+  git commit -m "chore: release $NEW_TAG"
+fi
 
 # Generate release notes with AI
 echo ""
@@ -84,7 +98,7 @@ if bash scripts/generate-release-notes.sh > "$NOTES_FILE"; then
 
   # Create annotated tag with the generated notes
   echo "Creating release tag with generated notes..."
-  git tag -a "v$NEW_VERSION" -F "$NOTES_FILE" --cleanup=verbatim
+  git tag -a "$NEW_TAG" -F "$NOTES_FILE" --cleanup=verbatim
 
   rm "$NOTES_FILE"
 else
@@ -95,18 +109,18 @@ else
   echo ""
   echo "Install at least one AI CLI tool (Claude, Gemini, or Codex)"
   echo "Creating tag with default message..."
-  git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION" --cleanup=verbatim
+  git tag -a "$NEW_TAG" -m "Release $NEW_TAG" --cleanup=verbatim
 fi
 
 # Show what will be pushed
 echo ""
 echo "Ready to push the following:"
-echo "  - Commit: chore: release v$NEW_VERSION"
-echo "  - Tag: v$NEW_VERSION"
+[ "$NEW_VERSION" != "$CURRENT_VERSION" ] && echo "  - Commit: chore: release $NEW_TAG"
+echo "  - Tag: $NEW_TAG"
 echo ""
 echo "To push the release, run:"
 echo "  git push origin main"
-echo "  git push origin v$NEW_VERSION"
+echo "  git push origin $NEW_TAG"
 echo ""
 echo "Or use the automated script:"
 echo "  ./scripts/release-and-push.sh"

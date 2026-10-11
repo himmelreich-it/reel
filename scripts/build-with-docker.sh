@@ -78,8 +78,8 @@ docker buildx build \
     -f "$DOCKERFILE" \
     .
 
-# Extract version from Cargo.toml
-VERSION=$(grep '^version' Cargo.toml | cut -d'"' -f2)
+# Version for the package file names, from Cargo.toml unless set by the caller
+VERSION=${VERSION:-$(grep '^version' Cargo.toml | cut -d'"' -f2)}
 echo "Version: $VERSION"
 
 # Function to run commands in the container

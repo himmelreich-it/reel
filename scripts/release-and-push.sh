@@ -8,8 +8,9 @@ echo ""
 # Run the make-release script
 bash scripts/make-release.sh "$@"
 
-# Extract the new version that was just created
-NEW_VERSION=$(git describe --tags --abbrev=0)
+# The tag make-release.sh just created. A hit release can share its commit with
+# the upstream tag, so take the newest tag on HEAD rather than git describe.
+NEW_VERSION=$(git tag --points-at HEAD --sort=-creatordate | head -1)
 
 echo "Pushing release to origin..."
 git push origin main
@@ -29,4 +30,4 @@ else
 fi
 echo ""
 echo "Monitor progress at:"
-echo "  https://github.com/arsfeld/reel/actions"
+echo "  https://github.com/himmelreich-it/reel/actions"
