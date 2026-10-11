@@ -129,6 +129,7 @@ let
 
   # Package building commands (Linux-only)
   buildDeb = pkgs.writeShellScriptBin "build-deb" ''
+    set -euo pipefail
     echo "Building Debian package..."
     echo "=============================="
 
@@ -138,7 +139,7 @@ let
 
     # Create debian package structure
     PKG_NAME="reel"
-    VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+    VERSION=$(grep -m1 "^version" Cargo.toml | cut -d'"' -f2)
     ARCH=$(dpkg --print-architecture)
     DEB_DIR="target/debian/$PKG_NAME-$VERSION"
 
@@ -188,6 +189,7 @@ let
   '';
 
   buildRpm = pkgs.writeShellScriptBin "build-rpm" ''
+    set -euo pipefail
     echo "Building RPM package..."
     echo "=============================="
 
@@ -196,7 +198,7 @@ let
     cargo build --release
 
     PKG_NAME="reel"
-    VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+    VERSION=$(grep -m1 "^version" Cargo.toml | cut -d'"' -f2)
 
     # Create RPM build structure
     RPM_DIR="$HOME/rpmbuild"
@@ -266,6 +268,7 @@ let
   '';
 
   buildAppImage = pkgs.writeShellScriptBin "build-appimage" ''
+    set -euo pipefail
     echo "Building AppImage..."
     echo "=============================="
 
@@ -286,7 +289,7 @@ let
     cargo build --release
 
     PKG_NAME="reel"
-    VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+    VERSION=$(grep -m1 "^version" Cargo.toml | cut -d'"' -f2)
     APP_DIR="target/appimage/$PKG_NAME.AppDir"
 
     echo "Creating AppImage structure..."
@@ -343,6 +346,7 @@ let
   '';
 
   buildAllPackages = pkgs.writeShellScriptBin "build-all-packages" ''
+    set -euo pipefail
     echo "Building all package formats..."
     echo "================================"
     echo ""
