@@ -4,9 +4,33 @@ use gtk::prelude::*;
 use relm4::factory::FactoryComponent;
 use relm4::prelude::*;
 
+/// How a card shows its image and text
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CardLayout {
+    /// Poster with the title on a gradient over it (library grids, search)
+    Overlay,
+    /// Poster with the title below it
+    Poster,
+    /// 16:9 still with the title below it
+    Landscape,
+}
+
+impl CardLayout {
+    /// Width and height of the image
+    fn image_size(self) -> (i32, i32) {
+        match self {
+            CardLayout::Overlay | CardLayout::Poster => (180, 270),
+            CardLayout::Landscape => (320, 180),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct MediaCardInit {
     pub item: MediaItemModel,
+    pub layout: CardLayout,
+    /// Replaces the line under the title (e.g. "S2 E3 · 22 min left")
+    pub subtitle: Option<String>,
     pub show_progress: bool,
     pub watched: bool,
     pub progress_percent: f64,
@@ -21,6 +45,10 @@ pub struct MediaCard {
     item_id: MediaItemId,
     #[do_not_track]
     parent_show_id: Option<MediaItemId>, // For episodes, ID of parent show
+    #[do_not_track]
+    layout: CardLayout,
+    #[do_not_track]
+    subtitle: String,
     show_progress: bool,
     show_media_type_icon: bool,
     hover: bool,
@@ -69,114 +97,154 @@ impl FactoryComponent for MediaCard {
             add_css_class: "flat",
             add_css_class: "media-card",
             add_css_class: "poster-card",
-            set_width_request: 180,
-            set_height_request: 270,
+            add_css_class: if self.layout == CardLayout::Overlay { "overlaid" } else { "captioned" },
+            set_width_request: self.layout.image_size().0,
+            set_height_request: if self.layout == CardLayout::Overlay {
+                self.layout.image_size().1
+            } else {
+                -1
+            },
 
-            // Main overlay container
-            gtk::Overlay {
-                add_css_class: "poster-overlay",
+            gtk::Box {
+                set_orientation: gtk::Orientation::Vertical,
+                set_spacing: 8,
 
-                // Poster image with proper aspect ratio
-                #[name(poster)]
-                gtk::Picture {
-                    set_content_fit: gtk::ContentFit::Cover,
-                    set_can_shrink: true,
-                    set_width_request: 180,
-                    set_height_request: 270,
-                    add_css_class: "rounded-poster",
-                    #[track(self.changed(MediaCard::image_loaded()))]
-                    add_css_class: if self.image_loaded { "poster-fade-in" } else { "poster-skeleton" },
-                },
+                // Main overlay container
+                gtk::Overlay {
+                    add_css_class: "poster-overlay",
+
+                    // Poster image with proper aspect ratio
+                    #[name(poster)]
+                    gtk::Picture {
+                        set_content_fit: gtk::ContentFit::Cover,
+                        set_can_shrink: true,
+                        set_width_request: self.layout.image_size().0,
+                        set_height_request: self.layout.image_size().1,
+                        add_css_class: "rounded-poster",
+                        #[track(self.changed(MediaCard::image_loaded()))]
+                        add_css_class: if self.image_loaded { "poster-fade-in" } else { "poster-skeleton" },
+                    },
 
 
-                // Info gradient at bottom
-                add_overlay = &gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_valign: gtk::Align::End,
-                    add_css_class: "poster-info-gradient",
-
-                    // Inner box with text
-                    gtk::Box {
+                    // Info gradient at bottom
+                    add_overlay = &gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 2,
-                        set_margin_bottom: 4,
-                        set_margin_start: 4,
-                        set_margin_end: 4,
+                        set_valign: gtk::Align::End,
+                        set_visible: self.layout == CardLayout::Overlay,
+                        add_css_class: "poster-info-gradient",
+
+                        // Inner box with text
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 2,
+                            set_margin_bottom: 4,
+                            set_margin_start: 4,
+                            set_margin_end: 4,
+                            set_margin_top: 4,
+                            add_css_class: "media-card-info",
+
+                            gtk::Label {
+                                set_label: &self.item.title,
+                                set_xalign: 0.0,
+                                set_single_line_mode: true,
+                                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                add_css_class: "title-4",
+                            },
+
+                            gtk::Label {
+                                set_label: &self.subtitle,
+                                set_xalign: 0.0,
+                                set_single_line_mode: true,
+                                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                add_css_class: "subtitle",
+                                set_visible: !self.subtitle.is_empty(),
+                            }
+                        }
+                    },
+
+                    // Media type icon (top-left for mixed libraries)
+                    add_overlay = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_halign: gtk::Align::Start,
+                        set_valign: gtk::Align::Start,
+                        set_margin_top: 8,
+                        set_margin_start: 8,
+                        #[track(self.changed(MediaCard::show_media_type_icon()))]
+                        set_visible: self.show_media_type_icon,
+
+                        gtk::Box {
+                            set_width_request: 32,
+                            set_height_request: 32,
+                            add_css_class: "osd",
+                            add_css_class: "circular",
+                            set_halign: gtk::Align::Center,
+                            set_valign: gtk::Align::Center,
+
+                            gtk::Image {
+                                set_icon_name: Some(&self.get_media_type_icon()),
+                                set_pixel_size: 16,
+                            }
+                        }
+                    },
+
+                    // Unwatched indicator (top-right glowing dot)
+                    add_overlay = &gtk::Box {
+                        set_orientation: gtk::Orientation::Horizontal,
+                        set_halign: gtk::Align::End,
+                        set_valign: gtk::Align::Start,
                         set_margin_top: 4,
-                        add_css_class: "media-card-info",
+                        set_margin_end: 4,
+                        #[track(self.changed(MediaCard::item()))]
+                        set_visible: !self.is_watched(),
+                        add_css_class: "unwatched-indicator",
 
-                        gtk::Label {
-                            set_label: &self.item.title,
-                            set_xalign: 0.0,
-                            set_single_line_mode: true,
-                            set_ellipsize: gtk::pango::EllipsizeMode::End,
-                            add_css_class: "title-4",
-                        },
-
-                        gtk::Label {
-                            set_label: &self.format_subtitle(),
-                            set_xalign: 0.0,
-                            set_single_line_mode: true,
-                            set_ellipsize: gtk::pango::EllipsizeMode::End,
-                            add_css_class: "subtitle",
-                            #[track(self.changed(MediaCard::item()))]
-                            set_visible: !self.format_subtitle().is_empty(),
+                        gtk::Box {
+                            set_width_request: 8,
+                            set_height_request: 8,
+                            add_css_class: "unwatched-glow-dot",
                         }
+                    },
+
+                    // Progress bar overlay (bottom)
+                    add_overlay = &gtk::ProgressBar {
+                        set_valign: gtk::Align::End,
+                        #[track(self.changed(MediaCard::progress_percent()))]
+                        set_visible: self.show_progress && self.is_partially_watched(),
+                        #[track(self.changed(MediaCard::progress_percent()))]
+                        set_fraction: self.progress_percent,
+                        add_css_class: "media-progress",
                     }
                 },
 
-                // Media type icon (top-left for mixed libraries)
-                add_overlay = &gtk::Box {
-                    set_orientation: gtk::Orientation::Horizontal,
-                    set_halign: gtk::Align::Start,
-                    set_valign: gtk::Align::Start,
-                    set_margin_top: 8,
-                    set_margin_start: 8,
-                    #[track(self.changed(MediaCard::show_media_type_icon()))]
-                    set_visible: self.show_media_type_icon,
+                // Title and details below the image
+                gtk::Box {
+                    set_orientation: gtk::Orientation::Vertical,
+                    set_spacing: 2,
+                    set_visible: self.layout != CardLayout::Overlay,
+                    add_css_class: "media-card-caption",
 
-                    gtk::Box {
-                        set_width_request: 32,
-                        set_height_request: 32,
-                        add_css_class: "osd",
-                        add_css_class: "circular",
-                        set_halign: gtk::Align::Center,
-                        set_valign: gtk::Align::Center,
+                    gtk::Label {
+                        set_label: &self.item.title,
+                        set_xalign: 0.0,
+                        set_single_line_mode: true,
+                        set_ellipsize: gtk::pango::EllipsizeMode::End,
+                        // Ellipsize at the image's width instead of widening the card
+                        set_max_width_chars: 1,
+                        set_hexpand: true,
+                        add_css_class: "media-card-title",
+                    },
 
-                        gtk::Image {
-                            set_icon_name: Some(&self.get_media_type_icon()),
-                            set_pixel_size: 16,
-                        }
-                    }
+                    gtk::Label {
+                        set_label: &self.subtitle,
+                        set_xalign: 0.0,
+                        set_single_line_mode: true,
+                        set_ellipsize: gtk::pango::EllipsizeMode::End,
+                        set_max_width_chars: 1,
+                        set_hexpand: true,
+                        add_css_class: "media-card-subtitle",
+                        set_visible: !self.subtitle.is_empty(),
+                    },
                 },
-
-                // Unwatched indicator (top-right glowing dot)
-                add_overlay = &gtk::Box {
-                    set_orientation: gtk::Orientation::Horizontal,
-                    set_halign: gtk::Align::End,
-                    set_valign: gtk::Align::Start,
-                    set_margin_top: 4,
-                    set_margin_end: 4,
-                    #[track(self.changed(MediaCard::item()))]
-                    set_visible: !self.is_watched(),
-                    add_css_class: "unwatched-indicator",
-
-                    gtk::Box {
-                        set_width_request: 8,
-                        set_height_request: 8,
-                        add_css_class: "unwatched-glow-dot",
-                    }
-                },
-
-                // Progress bar overlay (bottom)
-                add_overlay = &gtk::ProgressBar {
-                    set_valign: gtk::Align::End,
-                    #[track(self.changed(MediaCard::progress_percent()))]
-                    set_visible: self.is_partially_watched(),
-                    #[track(self.changed(MediaCard::progress_percent()))]
-                    set_fraction: self.progress_percent,
-                    add_css_class: "media-progress",
-                }
             },
 
             connect_clicked[sender, item_id = self.item_id.clone()] => move |_| {
@@ -309,10 +377,16 @@ impl FactoryComponent for MediaCard {
             init.item.poster_url.is_some() && !init.item.poster_url.as_ref().unwrap().is_empty();
         let image_loaded = !has_poster; // If no poster URL, consider it "loaded" to hide spinner
 
+        let subtitle = init
+            .subtitle
+            .unwrap_or_else(|| Self::format_subtitle(&init.item));
+
         Self {
             item: init.item,
             item_id,
             parent_show_id,
+            layout: init.layout,
+            subtitle,
             show_progress: init.show_progress,
             show_media_type_icon: init.show_media_type_icon,
             hover: false,
@@ -374,10 +448,10 @@ impl FactoryComponent for MediaCard {
 }
 
 impl MediaCard {
-    fn format_subtitle(&self) -> String {
-        match self.item.media_type.as_str() {
+    fn format_subtitle(item: &MediaItemModel) -> String {
+        match item.media_type.as_str() {
             "movie" => {
-                if let Some(year) = self.item.year {
+                if let Some(year) = item.year {
                     format!("{}", year)
                 } else {
                     String::new()
@@ -386,7 +460,7 @@ impl MediaCard {
             "show" => {
                 // For shows, we'll extract episode count from metadata if available
                 // Otherwise default to "TV Series"
-                if let Some(metadata) = &self.item.metadata {
+                if let Some(metadata) = &item.metadata {
                     // Try to extract episode count from metadata JSON
                     if let Some(episode_count) =
                         metadata.get("total_episode_count").and_then(|v| v.as_u64())
@@ -414,7 +488,7 @@ impl MediaCard {
             "episode" => {
                 // For episodes, check if we have a custom episode subtitle in metadata
                 // (set when we're displaying the show poster instead of episode thumbnail)
-                if let Some(metadata) = &self.item.metadata
+                if let Some(metadata) = &item.metadata
                     && let Some(episode_subtitle) =
                         metadata.get("episode_subtitle").and_then(|v| v.as_str())
                 {
@@ -422,9 +496,7 @@ impl MediaCard {
                 }
 
                 // Otherwise format like normal
-                if let (Some(season), Some(episode)) =
-                    (self.item.season_number, self.item.episode_number)
-                {
+                if let (Some(season), Some(episode)) = (item.season_number, item.episode_number) {
                     format!("S{}E{}", season, episode)
                 } else {
                     "Episode".to_string()

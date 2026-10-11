@@ -9,7 +9,9 @@ use crate::db::connection::DatabaseConnection;
 use crate::db::entities::MediaItemModel;
 use crate::db::repository::{Repository, media_repository::MediaRepositoryImpl};
 use crate::models::MediaItemId;
-use crate::ui::factories::media_card::{MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput};
+use crate::ui::factories::media_card::{
+    CardLayout, MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput,
+};
 use crate::workers::{ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize};
 use relm4::factory::DynamicIndex;
 
@@ -351,6 +353,8 @@ impl AsyncComponent for SearchPage {
                     let poster_url_to_load = display_item.poster_url.clone();
 
                     let card_init = MediaCardInit {
+                        layout: CardLayout::Overlay,
+                        subtitle: None,
                         item: display_item,
                         show_progress: true,
                         watched: false,

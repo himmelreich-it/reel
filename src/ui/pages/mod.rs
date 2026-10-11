@@ -2,7 +2,6 @@ pub mod home;
 pub mod library;
 pub mod movie_details;
 pub mod player;
-pub mod preferences;
 pub mod search;
 pub mod show_details;
 pub mod sources;
