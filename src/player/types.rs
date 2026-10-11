@@ -66,3 +66,67 @@ impl Default for ZoomMode {
         Self::Fit
     }
 }
+
+/// An audio or subtitle track as reported by a player backend.
+///
+/// `id` is backend specific (mpv ids are 1-based, GStreamer indices 0-based),
+/// so anything persisted must use `language` and `title` instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackInfo {
+    pub id: i32,
+    pub name: String,
+    pub language: Option<String>,
+    pub title: Option<String>,
+    /// Marked as forced (only parts in another language). GStreamer doesn't
+    /// expose the container's forced flag, so there only the title tells.
+    pub forced: bool,
+    /// Marked as the file's default track
+    pub default: bool,
+    /// Marked as for the hearing impaired (SDH). GStreamer doesn't expose
+    /// this flag either, so there only the title tells.
+    pub hearing_impaired: bool,
+}
+
+impl TrackInfo {
+    /// Forced by its flag or by a title like "English (Forced)", which is how
+    /// many releases mark forced subtitles.
+    pub fn is_forced(&self) -> bool {
+        self.forced
+            || self
+                .title
+                .as_deref()
+                .is_some_and(|title| title.to_lowercase().contains("forced"))
+    }
+
+    /// For the hearing impaired by its flag or by a title like "English SDH"
+    pub fn is_hearing_impaired(&self) -> bool {
+        self.hearing_impaired
+            || self.title.as_deref().is_some_and(|title| {
+                let title = title.to_lowercase();
+                title.contains("sdh") || title.contains("hearing impaired")
+            })
+    }
+
+    /// The "no subtitles" entry that heads every subtitle track list.
+    pub fn subtitles_off() -> Self {
+        Self {
+            id: -1,
+            name: "None".to_string(),
+            language: None,
+            title: None,
+            forced: false,
+            default: false,
+            hearing_impaired: false,
+        }
+    }
+}
+
+/// Styling applied to text subtitles (ASS subtitles keep their own styling).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubtitleStyle {
+    pub font_size: u32,
+    /// Text colour as `#RRGGBB`.
+    pub color: String,
+    pub border_size: f64,
+    pub background: bool,
+}

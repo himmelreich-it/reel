@@ -1,3 +1,4 @@
+use crate::player::types::TrackInfo;
 use anyhow::Result;
 use gstreamer as gst;
 use gstreamer::prelude::*;
@@ -14,6 +15,17 @@ pub struct StreamInfo {
     pub index: i32,
     pub language: Option<String>,
     pub codec: Option<String>,
+    /// The container marks this stream as selected by default
+    pub default: bool,
+}
+
+/// The stream's title tag, if the container provides one.
+fn stream_title(stream: &StreamInfo) -> Option<String> {
+    stream
+        .tags
+        .as_ref()
+        .and_then(|tags| tags.get::<gst::tags::Title>())
+        .map(|title| title.get().to_string())
 }
 
 /// Manages stream collections and track selection for GStreamer player
@@ -110,6 +122,7 @@ impl StreamManager {
                     index: 0,
                     language: language.clone(),
                     codec: codec.clone(),
+                    default: stream.stream_flags().contains(gst::StreamFlags::SELECT),
                 };
 
                 if stream_type.contains(gst::StreamType::VIDEO) {
@@ -279,12 +292,15 @@ impl StreamManager {
     }
 
     /// Get available audio tracks
-    pub fn get_audio_tracks(&self, playbin: Option<&gst::Element>) -> Vec<(i32, String)> {
+    pub fn get_audio_tracks(&self, playbin: Option<&gst::Element>) -> Vec<TrackInfo> {
         let mut tracks = Vec::new();
         let audio_streams = self.audio_streams.lock().unwrap();
 
         for stream in audio_streams.iter() {
-            let track_name = if let Some(ref lang) = stream.language {
+            let title = stream_title(stream);
+            let track_name = if let Some(ref title) = title {
+                title.clone()
+            } else if let Some(ref lang) = stream.language {
                 // Format track name with language
                 format!("Audio Track {} ({})", stream.index + 1, lang)
             } else if let Some(ref codec) = stream.codec {
@@ -294,7 +310,15 @@ impl StreamManager {
                 // Default format
                 format!("Audio Track {}", stream.index + 1)
             };
-            tracks.push((stream.index, track_name));
+            tracks.push(TrackInfo {
+                id: stream.index,
+                name: track_name,
+                language: stream.language.clone(),
+                title,
+                forced: false,
+                default: stream.default,
+                hearing_impaired: false,
+            });
         }
 
         // No workaround needed - stream collections are now reliably processed
@@ -323,23 +347,32 @@ impl StreamManager {
     }
 
     /// Get available subtitle tracks
-    pub fn get_subtitle_tracks(&self) -> Vec<(i32, String)> {
-        let mut tracks = Vec::new();
-
-        // Add "None" option first
-        tracks.push((-1, "None".to_string()));
+    pub fn get_subtitle_tracks(&self) -> Vec<TrackInfo> {
+        // "None" option first
+        let mut tracks = vec![TrackInfo::subtitles_off()];
 
         let subtitle_streams = self.subtitle_streams.lock().unwrap();
 
         for stream in subtitle_streams.iter() {
-            let track_name = if let Some(ref lang) = stream.language {
+            let title = stream_title(stream);
+            let track_name = if let Some(ref title) = title {
+                title.clone()
+            } else if let Some(ref lang) = stream.language {
                 // Format track name with language
                 format!("Subtitle {} ({})", stream.index + 1, lang)
             } else {
                 // Default format
                 format!("Subtitle {}", stream.index + 1)
             };
-            tracks.push((stream.index, track_name));
+            tracks.push(TrackInfo {
+                id: stream.index,
+                name: track_name,
+                language: stream.language.clone(),
+                title,
+                forced: false,
+                default: stream.default,
+                hearing_impaired: false,
+            });
         }
 
         tracks

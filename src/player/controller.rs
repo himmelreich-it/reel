@@ -8,7 +8,7 @@ use tracing::{debug, trace};
 use super::{Player, PlayerState};
 use crate::config::Config;
 
-use crate::player::{UpscalingMode, ZoomMode};
+use crate::player::{SubtitleStyle, TrackInfo, UpscalingMode, ZoomMode};
 
 #[cfg(feature = "gstreamer")]
 use crate::player::BufferingState;
@@ -65,11 +65,11 @@ pub enum PlayerCommand {
     },
     /// Get audio tracks
     GetAudioTracks {
-        respond_to: oneshot::Sender<Vec<(i32, String)>>,
+        respond_to: oneshot::Sender<Vec<TrackInfo>>,
     },
     /// Get subtitle tracks
     GetSubtitleTracks {
-        respond_to: oneshot::Sender<Vec<(i32, String)>>,
+        respond_to: oneshot::Sender<Vec<TrackInfo>>,
     },
     /// Set audio track
     SetAudioTrack {
@@ -85,6 +85,27 @@ pub enum PlayerCommand {
     GetCurrentAudioTrack { respond_to: oneshot::Sender<i32> },
     /// Get current subtitle track
     GetCurrentSubtitleTrack { respond_to: oneshot::Sender<i32> },
+    /// Set preferred audio and subtitle languages (ISO 639-1 codes)
+    SetTrackLanguages {
+        audio: String,
+        subtitle: String,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Set subtitle styling
+    SetSubtitleStyle {
+        style: SubtitleStyle,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Set audio delay in seconds
+    SetAudioDelay {
+        seconds: f64,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
+    /// Set subtitle delay in seconds
+    SetSubtitleDelay {
+        seconds: f64,
+        respond_to: oneshot::Sender<Result<()>>,
+    },
     /// Set upscaling mode (MPV only)
     SetUpscalingMode {
         mode: UpscalingMode,
@@ -295,6 +316,36 @@ impl PlayerController {
                 PlayerCommand::GetCurrentSubtitleTrack { respond_to } => {
                     let track = self.player.get_current_subtitle_track().await;
                     let _ = respond_to.send(track);
+                }
+                PlayerCommand::SetTrackLanguages {
+                    audio,
+                    subtitle,
+                    respond_to,
+                } => {
+                    trace!("Setting track languages to {:?}/{:?}", audio, subtitle);
+                    let result = self.player.set_track_languages(&audio, &subtitle).await;
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::SetSubtitleStyle { style, respond_to } => {
+                    trace!("Setting subtitle style to {:?}", style);
+                    let result = self.player.set_subtitle_style(style).await;
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::SetAudioDelay {
+                    seconds,
+                    respond_to,
+                } => {
+                    trace!("Setting audio delay to {}s", seconds);
+                    let result = self.player.set_audio_delay(seconds).await;
+                    let _ = respond_to.send(result);
+                }
+                PlayerCommand::SetSubtitleDelay {
+                    seconds,
+                    respond_to,
+                } => {
+                    trace!("Setting subtitle delay to {}s", seconds);
+                    let result = self.player.set_subtitle_delay(seconds).await;
+                    let _ = respond_to.send(result);
                 }
                 PlayerCommand::SetUpscalingMode { mode, respond_to } => {
                     trace!("Setting upscaling mode to {:?}", mode);
@@ -529,7 +580,7 @@ impl PlayerHandle {
     }
 
     /// Get audio tracks
-    pub async fn get_audio_tracks(&self) -> Result<Vec<(i32, String)>> {
+    pub async fn get_audio_tracks(&self) -> Result<Vec<TrackInfo>> {
         let (respond_to, response) = oneshot::channel();
         self.sender
             .send(PlayerCommand::GetAudioTracks { respond_to })
@@ -540,7 +591,7 @@ impl PlayerHandle {
     }
 
     /// Get subtitle tracks
-    pub async fn get_subtitle_tracks(&self) -> Result<Vec<(i32, String)>> {
+    pub async fn get_subtitle_tracks(&self) -> Result<Vec<TrackInfo>> {
         let (respond_to, response) = oneshot::channel();
         self.sender
             .send(PlayerCommand::GetSubtitleTracks { respond_to })
@@ -598,6 +649,60 @@ impl PlayerHandle {
         response
             .await
             .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))
+    }
+
+    /// Set preferred audio and subtitle languages (ISO 639-1 codes, empty for none)
+    pub async fn set_track_languages(&self, audio: &str, subtitle: &str) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::SetTrackLanguages {
+                audio: audio.to_string(),
+                subtitle: subtitle.to_string(),
+                respond_to,
+            })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Set subtitle styling
+    pub async fn set_subtitle_style(&self, style: SubtitleStyle) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::SetSubtitleStyle { style, respond_to })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Set audio delay in seconds
+    pub async fn set_audio_delay(&self, seconds: f64) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::SetAudioDelay {
+                seconds,
+                respond_to,
+            })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
+    }
+
+    /// Set subtitle delay in seconds
+    pub async fn set_subtitle_delay(&self, seconds: f64) -> Result<()> {
+        let (respond_to, response) = oneshot::channel();
+        self.sender
+            .send(PlayerCommand::SetSubtitleDelay {
+                seconds,
+                respond_to,
+            })
+            .map_err(|_| anyhow::anyhow!("Player controller disconnected"))?;
+        response
+            .await
+            .map_err(|_| anyhow::anyhow!("Failed to receive response from player controller"))?
     }
 
     /// Set upscaling mode (MPV only)

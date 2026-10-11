@@ -628,3 +628,11 @@ button.circular > *,
     min-width: inherit;
     min-height: inherit;
 }
+/* Short feedback messages over the video (e.g. delay changes) */
+.player-osd-message {
+    background-color: rgba(0, 0, 0, 0.7);
+    color: white;
+    border-radius: 8px;
+    padding: 8px 14px;
+    font-weight: bold;
+}

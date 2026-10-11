@@ -14,6 +14,7 @@ use super::MpvPlayer;
 use super::gstreamer_player::PlayerState as GstPlayerState;
 #[cfg(all(feature = "mpv", not(target_os = "macos")))]
 use super::mpv_player::PlayerState as MpvPlayerState;
+use super::types::{SubtitleStyle, TrackInfo};
 use crate::config::Config;
 
 #[derive(Debug)]
@@ -105,7 +106,7 @@ impl Player {
                 if cfg!(target_os = "macos") {
                     warn!("MPV backend requested on macOS, falling back to GStreamer");
                     #[cfg(feature = "gstreamer")]
-                    return match GStreamerPlayer::new() {
+                    return match GStreamerPlayer::new(config) {
                         Ok(player) => {
                             debug!("Created GStreamer player (macOS fallback)");
                             Ok(Player::GStreamer(player))
@@ -134,7 +135,7 @@ impl Player {
                         #[cfg(feature = "gstreamer")]
                         {
                             warn!("Attempting fallback to GStreamer");
-                            match GStreamerPlayer::new() {
+                            match GStreamerPlayer::new(config) {
                                 Ok(gst_player) => {
                                     warn!("Created GStreamer fallback player");
                                     return Ok(Player::GStreamer(gst_player));
@@ -154,7 +155,7 @@ impl Player {
             #[cfg(feature = "gstreamer")]
             PlayerBackend::GStreamer => {
                 debug!("Creating GStreamer player backend");
-                match GStreamerPlayer::new() {
+                match GStreamerPlayer::new(config) {
                     Ok(player) => {
                         debug!("GStreamer player created");
                         Ok(Player::GStreamer(player))
@@ -338,7 +339,7 @@ impl Player {
         }
     }
 
-    pub async fn get_audio_tracks(&self) -> Vec<(i32, String)> {
+    pub async fn get_audio_tracks(&self) -> Vec<TrackInfo> {
         match self {
             #[cfg(feature = "gstreamer")]
             Player::GStreamer(p) => p.get_audio_tracks().await,
@@ -347,7 +348,7 @@ impl Player {
         }
     }
 
-    pub async fn get_subtitle_tracks(&self) -> Vec<(i32, String)> {
+    pub async fn get_subtitle_tracks(&self) -> Vec<TrackInfo> {
         match self {
             #[cfg(feature = "gstreamer")]
             Player::GStreamer(p) => p.get_subtitle_tracks().await,
@@ -389,6 +390,52 @@ impl Player {
             Player::GStreamer(p) => p.get_current_subtitle_track().await,
             #[cfg(all(feature = "mpv", not(target_os = "macos")))]
             Player::Mpv(p) => p.get_current_subtitle_track().await,
+        }
+    }
+
+    /// Set the preferred audio and subtitle languages (ISO 639-1 codes, empty for none).
+    ///
+    /// The player page selects the final tracks once a file is ready. mpv
+    /// starts playing as soon as it loads a file, so it gets the languages too
+    /// and starts in the right language. GStreamer selects nothing before the
+    /// page does, so it has nothing to configure.
+    #[cfg_attr(
+        not(all(feature = "mpv", not(target_os = "macos"))),
+        allow(unused_variables)
+    )]
+    pub async fn set_track_languages(&self, audio: &str, subtitle: &str) -> Result<()> {
+        match self {
+            #[cfg(feature = "gstreamer")]
+            Player::GStreamer(_) => Ok(()),
+            #[cfg(all(feature = "mpv", not(target_os = "macos")))]
+            Player::Mpv(p) => p.set_track_languages(audio, subtitle).await,
+        }
+    }
+
+    pub async fn set_subtitle_style(&self, style: SubtitleStyle) -> Result<()> {
+        match self {
+            #[cfg(feature = "gstreamer")]
+            Player::GStreamer(p) => p.set_subtitle_style(style).await,
+            #[cfg(all(feature = "mpv", not(target_os = "macos")))]
+            Player::Mpv(p) => p.set_subtitle_style(style).await,
+        }
+    }
+
+    pub async fn set_audio_delay(&self, seconds: f64) -> Result<()> {
+        match self {
+            #[cfg(feature = "gstreamer")]
+            Player::GStreamer(p) => p.set_audio_delay(seconds).await,
+            #[cfg(all(feature = "mpv", not(target_os = "macos")))]
+            Player::Mpv(p) => p.set_audio_delay(seconds).await,
+        }
+    }
+
+    pub async fn set_subtitle_delay(&self, seconds: f64) -> Result<()> {
+        match self {
+            #[cfg(feature = "gstreamer")]
+            Player::GStreamer(p) => p.set_subtitle_delay(seconds).await,
+            #[cfg(all(feature = "mpv", not(target_os = "macos")))]
+            Player::Mpv(p) => p.set_subtitle_delay(seconds).await,
         }
     }
 

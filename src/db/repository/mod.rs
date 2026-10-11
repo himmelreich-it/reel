@@ -8,6 +8,7 @@ pub mod playback_repository;
 pub mod playback_sync_repository;
 pub mod source_repository;
 pub mod sync_repository;
+pub mod track_preference_repository;
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -63,3 +64,4 @@ pub use people_repository::{PeopleRepository, PeopleRepositoryImpl};
 pub use playback_repository::{PlaybackRepository, PlaybackRepositoryImpl};
 pub use playback_sync_repository::{PlaybackSyncRepository, PlaybackSyncRepositoryImpl};
 pub use source_repository::SourceRepositoryImpl;
+pub use track_preference_repository::{TrackPreferenceRepository, TrackPreferenceRepositoryImpl};

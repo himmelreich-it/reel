@@ -35,6 +35,8 @@ mod seek_bar;
 use seek_bar::SeekBarManager;
 mod volume;
 use volume::VolumeManager;
+mod track_preferences;
+use track_preferences::{AppliedDelays, DelayKind, TrackKind};
 
 fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs();
@@ -87,8 +89,19 @@ pub struct PlayerPage {
     // Track selection menus
     audio_menu_button: gtk::MenuButton,
     subtitle_menu_button: gtk::MenuButton,
-    current_audio_track: Option<i32>,
-    current_subtitle_track: Option<i32>,
+    // Audio/subtitle sync, in milliseconds (positive delays them)
+    sync_menu_button: gtk::MenuButton,
+    audio_delay_label: gtk::Label,
+    subtitle_delay_label: gtk::Label,
+    audio_delay_ms: i64,
+    subtitle_delay_ms: i64,
+    // Bumped on every delay change; only the latest scheduled save runs
+    delay_save_generation: u64,
+    // A delay change waits to be saved
+    delay_save_pending: bool,
+    // Short feedback shown over the video (e.g. delay changes)
+    osd_message: gtk::Label,
+    osd_message_generation: u64,
     // Auto-play management
     auto_play_manager: AutoPlayManager,
     // Video quality (upscaling) state
@@ -142,6 +155,15 @@ pub enum PlayerInput {
     UpdateTrackMenus,
     SetAudioTrack(i32),
     SetSubtitleTrack(i32),
+    TrackPreferencesApplied(AppliedDelays),
+    // Audio/subtitle sync, in milliseconds
+    SetAudioDelay(i64),
+    SetSubtitleDelay(i64),
+    AdjustAudioDelay(i64),
+    AdjustSubtitleDelay(i64),
+    ResetDelays,
+    SaveDelays(u64),
+    HideOsdMessage(u64),
     PlayPause,
     Stop,
     Seek(Duration),
@@ -398,6 +420,9 @@ impl AsyncComponent for PlayerPage {
             // Buffering overlay
             add_overlay = model.buffering_overlay.widget(),
 
+            // Short feedback messages (e.g. delay changes)
+            add_overlay = &model.osd_message.clone(),
+
             // Skip intro button overlay
             add_overlay = &gtk::Box {
                 set_halign: gtk::Align::End,
@@ -596,6 +621,13 @@ impl AsyncComponent for PlayerPage {
                             set_visible: false,
                         },
 
+                        // Audio/subtitle sync button
+                        model.sync_menu_button.clone() {
+                            set_icon_name: "preferences-system-time-symbolic",
+                            add_css_class: "flat",
+                            set_tooltip_text: Some("Audio and Subtitle Sync"),
+                        },
+
                         // Zoom button
                         model.zoom_menu_button.clone() {
                             set_icon_name: "zoom-in-symbolic",
@@ -692,6 +724,9 @@ impl AsyncComponent for PlayerPage {
         let subtitle_menu_button = gtk::MenuButton::new();
         let quality_menu_button = gtk::MenuButton::new();
         let zoom_menu_button = gtk::MenuButton::new();
+        let active_popover_count = std::rc::Rc::new(std::cell::RefCell::new(0));
+        let (sync_menu_button, audio_delay_label, subtitle_delay_label) =
+            Self::build_sync_menu(&sender, active_popover_count.clone());
         let zoom_label = gtk::Label::new(Some("Fit"));
 
         // Load config via the shared ConfigService so runtime updates stay in sync
@@ -729,8 +764,22 @@ impl AsyncComponent for PlayerPage {
             playback_speed: 1.0,
             audio_menu_button: audio_menu_button.clone(),
             subtitle_menu_button: subtitle_menu_button.clone(),
-            current_audio_track: None,
-            current_subtitle_track: None,
+            sync_menu_button,
+            audio_delay_label,
+            subtitle_delay_label,
+            audio_delay_ms: 0,
+            subtitle_delay_ms: 0,
+            delay_save_generation: 0,
+            delay_save_pending: false,
+            osd_message: gtk::Label::builder()
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Start)
+                .margin_top(48)
+                .css_classes(["player-osd-message"])
+                .visible(false)
+                .can_target(false)
+                .build(),
+            osd_message_generation: 0,
             auto_play_manager: AutoPlayManager::new(),
             quality_menu_button: quality_menu_button.clone(),
             current_upscaling_mode: Self::mpv_upscaling_mode_from_config(&config),
@@ -739,7 +788,7 @@ impl AsyncComponent for PlayerPage {
             current_zoom_mode: crate::player::ZoomMode::default(),
             zoom_label: zoom_label.clone(),
             controls_overlay: None, // Will be set when controls are created
-            active_popover_count: std::rc::Rc::new(std::cell::RefCell::new(0)),
+            active_popover_count,
             inactivity_timeout_secs: Self::DEFAULT_INACTIVITY_TIMEOUT_SECS,
             mouse_move_threshold: Self::DEFAULT_MOUSE_MOVE_THRESHOLD,
             // Skip intro/credits management
@@ -807,8 +856,17 @@ impl AsyncComponent for PlayerPage {
             let _sender_for_escape = sender.clone();
             let sender_for_fullscreen_check = sender.clone();
             let key_controller = gtk::EventControllerKey::new();
+            // Handle shortcuts before the focused widget does, so space keeps
+            // pausing instead of re-activating the last clicked control button
+            key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let popover_count = model.active_popover_count.clone();
             key_controller.connect_key_pressed(move |_controller, key, _keycode, modifiers| {
                 use gtk::gdk::ModifierType;
+
+                // An open popover (track menus, sync controls) gets the keys
+                if *popover_count.borrow() > 0 {
+                    return glib::Propagation::Proceed;
+                }
 
                 // Show controls on any keyboard input
                 sender.input(PlayerInput::MouseMove { x: 0.0, y: 0.0 });
@@ -816,6 +874,7 @@ impl AsyncComponent for PlayerPage {
                 // Check modifier keys
                 let shift_pressed = modifiers.contains(ModifierType::SHIFT_MASK);
                 let ctrl_pressed = modifiers.contains(ModifierType::CONTROL_MASK);
+                let alt_pressed = modifiers.contains(ModifierType::ALT_MASK);
 
                 match key {
                     // Fullscreen controls
@@ -935,6 +994,28 @@ impl AsyncComponent for PlayerPage {
                         sender.input(PlayerInput::CycleAudioTrack);
                         glib::Propagation::Stop
                     }
+                    // Subtitle and audio sync (Ctrl/Alt combinations stay free)
+                    gtk::gdk::Key::g | gtk::gdk::Key::h | gtk::gdk::Key::G | gtk::gdk::Key::H
+                        if ctrl_pressed || alt_pressed =>
+                    {
+                        glib::Propagation::Proceed
+                    }
+                    gtk::gdk::Key::g => {
+                        sender.input(PlayerInput::AdjustSubtitleDelay(-100));
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::h => {
+                        sender.input(PlayerInput::AdjustSubtitleDelay(100));
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::G => {
+                        sender.input(PlayerInput::AdjustAudioDelay(-100));
+                        glib::Propagation::Stop
+                    }
+                    gtk::gdk::Key::H => {
+                        sender.input(PlayerInput::AdjustAudioDelay(100));
+                        glib::Propagation::Stop
+                    }
                     // Controls visibility
                     gtk::gdk::Key::Tab => {
                         // Tab: toggle controls visibility
@@ -1017,7 +1098,7 @@ impl AsyncComponent for PlayerPage {
     ) {
         match msg {
             PlayerInput::LoadMedia(id) => {
-                self.media_item_id = Some(id.clone());
+                self.begin_track_preferences(&id);
                 self.player_state = PlayerState::Loading;
 
                 // Reset scrubber UI to prevent showing previous video's position
@@ -1229,6 +1310,19 @@ impl AsyncComponent for PlayerPage {
                                     }
                                 }
 
+                                // Select remembered or preferred tracks and restore sync delays
+                                match track_preferences::apply_track_preferences(
+                                    &player_handle,
+                                    &db_clone,
+                                    &media_id_for_resume,
+                                )
+                                .await
+                                {
+                                    Ok(delays) => sender_clone
+                                        .input(PlayerInput::TrackPreferencesApplied(delays)),
+                                    Err(e) => warn!("Failed to apply track preferences: {}", e),
+                                }
+
                                 // Try to get video dimensions and calculate appropriate window size
                                 if let Ok(Some((width, height))) =
                                     player_handle.get_video_dimensions().await
@@ -1278,7 +1372,7 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::LoadMediaWithContext { media_id, context } => {
-                self.media_item_id = Some(media_id.clone());
+                self.begin_track_preferences(&media_id);
                 self.player_state = PlayerState::Loading;
 
                 // Reset scrubber UI to prevent showing previous video's position
@@ -1491,6 +1585,19 @@ impl AsyncComponent for PlayerPage {
                                     }
                                 }
 
+                                // Select remembered or preferred tracks and restore sync delays
+                                match track_preferences::apply_track_preferences(
+                                    &player_handle,
+                                    &db_clone,
+                                    &media_id_for_resume,
+                                )
+                                .await
+                                {
+                                    Ok(delays) => sender_clone
+                                        .input(PlayerInput::TrackPreferencesApplied(delays)),
+                                    Err(e) => warn!("Failed to apply track preferences: {}", e),
+                                }
+
                                 // Try to get video dimensions and calculate appropriate window size
                                 if let Ok(Some((width, height))) =
                                     player_handle.get_video_dimensions().await
@@ -1566,6 +1673,7 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::Stop => {
+                self.flush_delay_save();
                 // Save current progress before stopping
                 if let Some(media_id) = &self.media_item_id {
                     let db = (*self.db).clone();
@@ -1874,22 +1982,18 @@ impl AsyncComponent for PlayerPage {
                 sender.input(PlayerInput::SetVolume(new_volume));
             }
             PlayerInput::CycleSubtitleTrack => {
-                // Cycle through available subtitle tracks
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
-                    sender.oneshot_command(async move {
-                        player_handle.cycle_subtitle_track().await.ok();
-                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    self.remember_track_after(&sender, TrackKind::Subtitle, async move {
+                        player_handle.cycle_subtitle_track().await
                     });
                 }
             }
             PlayerInput::CycleAudioTrack => {
-                // Cycle through available audio tracks
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
-                    sender.oneshot_command(async move {
-                        player_handle.cycle_audio_track().await.ok();
-                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    self.remember_track_after(&sender, TrackKind::Audio, async move {
+                        player_handle.cycle_audio_track().await
                     });
                 }
             }
@@ -1899,41 +2003,59 @@ impl AsyncComponent for PlayerPage {
                 self.populate_subtitle_menu(sender.clone());
                 self.populate_quality_menu(sender.clone());
                 self.populate_zoom_menu(sender.clone());
-
-                // Also get current track selections
-                if let Some(player) = &self.player {
-                    let player_handle = player.clone();
-                    let _sender_clone = sender.clone();
-                    glib::spawn_future_local(async move {
-                        let _audio_track =
-                            player_handle.get_current_audio_track().await.unwrap_or(-1);
-                        let _subtitle_track = player_handle
-                            .get_current_subtitle_track()
-                            .await
-                            .unwrap_or(-1);
-                        // Store the current tracks (we'll update the model in a moment)
-                    });
-                }
             }
             PlayerInput::SetAudioTrack(track_id) => {
                 if let Some(player) = &self.player {
-                    self.current_audio_track = Some(track_id);
                     let player_handle = player.clone();
-                    sender.oneshot_command(async move {
-                        let _ = player_handle.set_audio_track(track_id).await;
-                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    self.remember_track_after(&sender, TrackKind::Audio, async move {
+                        player_handle.set_audio_track(track_id).await
                     });
                 }
             }
             PlayerInput::SetSubtitleTrack(track_id) => {
                 if let Some(player) = &self.player {
-                    self.current_subtitle_track = Some(track_id);
                     let player_handle = player.clone();
-                    sender.oneshot_command(async move {
-                        let _ = player_handle.set_subtitle_track(track_id).await;
-                        PlayerCommandOutput::StateChanged(PlayerState::Playing)
+                    self.remember_track_after(&sender, TrackKind::Subtitle, async move {
+                        player_handle.set_subtitle_track(track_id).await
                     });
                 }
+            }
+            PlayerInput::TrackPreferencesApplied(delays) => {
+                self.delays_applied(delays);
+                sender.input(PlayerInput::UpdateTrackMenus);
+            }
+            PlayerInput::SetAudioDelay(delay_ms) => {
+                self.change_delay(DelayKind::Audio, delay_ms, &sender);
+            }
+            PlayerInput::SetSubtitleDelay(delay_ms) => {
+                self.change_delay(DelayKind::Subtitle, delay_ms, &sender);
+            }
+            PlayerInput::AdjustAudioDelay(step_ms) => {
+                // Update state here rather than via another input, so quick
+                // repeated presses each build on the previous one
+                self.change_delay(DelayKind::Audio, self.audio_delay_ms + step_ms, &sender);
+                self.show_osd_message(format!("Audio delay: {} ms", self.audio_delay_ms), &sender);
+            }
+            PlayerInput::AdjustSubtitleDelay(step_ms) => {
+                self.change_delay(
+                    DelayKind::Subtitle,
+                    self.subtitle_delay_ms + step_ms,
+                    &sender,
+                );
+                self.show_osd_message(
+                    format!("Subtitle delay: {} ms", self.subtitle_delay_ms),
+                    &sender,
+                );
+            }
+            PlayerInput::SaveDelays(generation) => {
+                self.save_delays(generation);
+            }
+            PlayerInput::HideOsdMessage(generation) => {
+                self.hide_osd_message(generation);
+            }
+            PlayerInput::ResetDelays => {
+                sender.input(PlayerInput::SetAudioDelay(0));
+                sender.input(PlayerInput::SetSubtitleDelay(0));
             }
             PlayerInput::ToggleControlsVisibility => {
                 // Toggle between Hidden and Visible states
@@ -2007,6 +2129,7 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::NavigateBack => {
+                self.flush_delay_save();
                 // Clear any timers and show cursor before navigating back
                 if let Some(timer) = self.cursor_timer.take() {
                     let _ = timer.remove();
@@ -2288,6 +2411,8 @@ impl AsyncComponent for PlayerPage {
     }
 
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
+        self.flush_delay_save_blocking();
+
         // Unsubscribe from MessageBroker
         relm4::spawn(async move {
             BROKER.unsubscribe("PlayerPage").await;

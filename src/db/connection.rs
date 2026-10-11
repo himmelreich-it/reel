@@ -112,9 +112,10 @@ impl Database {
 pub async fn get_test_db_connection() -> Result<SeaOrmConnection> {
     use tempfile::TempDir;
 
-    // Create temporary directory for test database
-    let temp_dir = TempDir::new()?;
-    let db_path = temp_dir.path().join("test.db");
+    // Keep the directory: dropping it deletes the database while the pool
+    // can still open new connections to it, which then see an empty file
+    let temp_dir = TempDir::new()?.keep();
+    let db_path = temp_dir.join("test.db");
 
     // Create database connection
     let db = Database::connect(&db_path).await?;
