@@ -1165,6 +1165,7 @@ impl MpvPlayer {
                     title,
                     forced: flag("forced"),
                     default: flag("default"),
+                    hearing_impaired: flag("hearing-impaired"),
                 });
             }
         }

@@ -24,6 +24,12 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(TrackPreferences::SubtitleLanguage).string())
                     .col(ColumnDef::new(TrackPreferences::SubtitleTitle).string())
                     .col(
+                        ColumnDef::new(TrackPreferences::SubtitleHearingImpaired)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
+                    .col(
                         ColumnDef::new(TrackPreferences::SubtitleOff)
                             .boolean()
                             .not_null()
@@ -91,6 +97,7 @@ enum TrackPreferences {
     AudioTitle,
     SubtitleLanguage,
     SubtitleTitle,
+    SubtitleHearingImpaired,
     SubtitleOff,
     AudioDelayMs,
     SubtitleDelayMs,

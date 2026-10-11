@@ -82,6 +82,9 @@ pub struct TrackInfo {
     pub forced: bool,
     /// Marked as the file's default track
     pub default: bool,
+    /// Marked as for the hearing impaired (SDH). GStreamer doesn't expose
+    /// this flag either, so there only the title tells.
+    pub hearing_impaired: bool,
 }
 
 impl TrackInfo {
@@ -95,6 +98,15 @@ impl TrackInfo {
                 .is_some_and(|title| title.to_lowercase().contains("forced"))
     }
 
+    /// For the hearing impaired by its flag or by a title like "English SDH"
+    pub fn is_hearing_impaired(&self) -> bool {
+        self.hearing_impaired
+            || self.title.as_deref().is_some_and(|title| {
+                let title = title.to_lowercase();
+                title.contains("sdh") || title.contains("hearing impaired")
+            })
+    }
+
     /// The "no subtitles" entry that heads every subtitle track list.
     pub fn subtitles_off() -> Self {
         Self {
@@ -104,6 +116,7 @@ impl TrackInfo {
             title: None,
             forced: false,
             default: false,
+            hearing_impaired: false,
         }
     }
 }

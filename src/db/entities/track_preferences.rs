@@ -15,6 +15,9 @@ pub struct Model {
     pub audio_title: Option<String>,
     pub subtitle_language: Option<String>,
     pub subtitle_title: Option<String>,
+    /// The chosen subtitles are for the hearing impaired (SDH), so a file
+    /// that names its SDH track differently still gets SDH
+    pub subtitle_hearing_impaired: bool,
     pub subtitle_off: bool,
     pub audio_delay_ms: i64,
     pub subtitle_delay_ms: i64,

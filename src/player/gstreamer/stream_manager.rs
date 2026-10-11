@@ -317,6 +317,7 @@ impl StreamManager {
                 title,
                 forced: false,
                 default: stream.default,
+                hearing_impaired: false,
             });
         }
 
@@ -370,6 +371,7 @@ impl StreamManager {
                 title,
                 forced: false,
                 default: stream.default,
+                hearing_impaired: false,
             });
         }
 

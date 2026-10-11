@@ -285,6 +285,8 @@ impl PreferenceChange {
             }
             PreferenceChange::Subtitle(track) => {
                 preference.subtitle_off = track.is_none();
+                preference.subtitle_hearing_impaired =
+                    track.as_ref().is_some_and(TrackInfo::is_hearing_impaired);
                 preference.subtitle_language = track.as_ref().and_then(|t| t.language.clone());
                 preference.subtitle_title = track.and_then(|t| t.title);
             }
@@ -318,6 +320,7 @@ fn base_preference(
         audio_title: None,
         subtitle_language: None,
         subtitle_title: None,
+        subtitle_hearing_impaired: false,
         subtitle_off: false,
         audio_delay_ms: 0,
         subtitle_delay_ms: 0,
@@ -406,9 +409,19 @@ async fn show_id_for(
 }
 
 /// The best of several tracks in one language: full rather than forced, then
-/// the file's default, then the first.
-fn best_track<'a>(tracks: impl Iterator<Item = &'a TrackInfo>) -> Option<&'a TrackInfo> {
-    tracks.min_by_key(|t| (t.is_forced(), !t.default))
+/// SDH or not as wanted (regular unless SDH was chosen before), then the
+/// file's default, then the first.
+fn best_track<'a>(
+    tracks: impl Iterator<Item = &'a TrackInfo>,
+    hearing_impaired: bool,
+) -> Option<&'a TrackInfo> {
+    tracks.min_by_key(|t| {
+        (
+            t.is_forced(),
+            t.is_hearing_impaired() != hearing_impaired,
+            !t.default,
+        )
+    })
 }
 
 /// The remembered track (same language and title, else the best track in
@@ -417,6 +430,7 @@ fn choose_track(
     tracks: &[TrackInfo],
     remembered_language: Option<&str>,
     remembered_title: Option<&str>,
+    remembered_hearing_impaired: bool,
     preferred_language: &str,
 ) -> Option<i32> {
     // Releases tag the same language differently ("ger", "deu", "de")
@@ -429,19 +443,25 @@ fn choose_track(
             .iter()
             .filter(same_language)
             .find(|t| t.title.as_deref() == remembered_title);
-        let by_language = remembered_language
-            .as_ref()
-            .and_then(|_| best_track(tracks.iter().filter(same_language)));
+        let by_language = remembered_language.as_ref().and_then(|_| {
+            best_track(
+                tracks.iter().filter(same_language),
+                remembered_hearing_impaired,
+            )
+        });
         if let Some(track) = exact.or(by_language) {
             return Some(track.id);
         }
     }
 
-    best_track(tracks.iter().filter(|t| {
-        t.language
-            .as_deref()
-            .is_some_and(|lang| language::track_matches(lang, preferred_language))
-    }))
+    best_track(
+        tracks.iter().filter(|t| {
+            t.language
+                .as_deref()
+                .is_some_and(|lang| language::track_matches(lang, preferred_language))
+        }),
+        remembered_hearing_impaired,
+    )
     .map(|t| t.id)
 }
 
@@ -454,6 +474,7 @@ fn choose_audio_track(
         tracks,
         remembered.and_then(|p| p.audio_language.as_deref()),
         remembered.and_then(|p| p.audio_title.as_deref()),
+        false,
         preferred_language,
     )
 }
@@ -474,6 +495,7 @@ fn choose_subtitle_track(
         &real_tracks,
         remembered.and_then(|p| p.subtitle_language.as_deref()),
         remembered.and_then(|p| p.subtitle_title.as_deref()),
+        remembered.is_some_and(|p| p.subtitle_hearing_impaired),
         preferred_language,
     )
 }
@@ -490,6 +512,7 @@ mod tests {
             title: title.map(str::to_string),
             forced: false,
             default: false,
+            hearing_impaired: false,
         }
     }
 
@@ -511,6 +534,7 @@ mod tests {
             audio_title: audio.1.map(str::to_string),
             subtitle_language: subtitle.0.map(str::to_string),
             subtitle_title: subtitle.1.map(str::to_string),
+            subtitle_hearing_impaired: false,
             subtitle_off,
             audio_delay_ms: 0,
             subtitle_delay_ms: 0,
@@ -596,6 +620,48 @@ mod tests {
             flagged(track(1, Some("eng"), None), true, false),
         ];
         assert_eq!(choose_subtitle_track(&forced_only, None, "en"), Some(1));
+    }
+
+    #[test]
+    fn sdh_follows_to_an_episode_that_names_it_differently() {
+        let mut sdh = track(2, Some("en-GB"), Some("British | SDH"));
+        sdh.hearing_impaired = true;
+        let tracks = [
+            TrackInfo::subtitles_off(),
+            track(1, Some("en-GB"), None),
+            sdh,
+        ];
+        let mut chose_sdh = remembered((None, None), (Some("en-GB"), Some("SDH")), false);
+        chose_sdh.subtitle_hearing_impaired = true;
+        assert_eq!(
+            choose_subtitle_track(&tracks, Some(&chose_sdh), "en"),
+            Some(2)
+        );
+
+        // Without an SDH choice the regular track wins, even over a default SDH track
+        let chose_regular = remembered((None, None), (Some("en-GB"), Some("English")), false);
+        assert_eq!(
+            choose_subtitle_track(&tracks, Some(&chose_regular), "en"),
+            Some(1)
+        );
+        let default_sdh = [
+            TrackInfo::subtitles_off(),
+            flagged(track(1, Some("eng"), Some("SDH")), false, true),
+            track(2, Some("eng"), None),
+        ];
+        assert_eq!(choose_subtitle_track(&default_sdh, None, "en"), Some(2));
+    }
+
+    #[test]
+    fn choosing_sdh_remembers_the_flag() {
+        let mut preference = remembered((None, None), (None, None), false);
+        PreferenceChange::Subtitle(Some(track(2, Some("eng"), Some("English SDH"))))
+            .apply_to(&mut preference);
+        assert!(preference.subtitle_hearing_impaired);
+        PreferenceChange::Subtitle(Some(track(1, Some("eng"), None))).apply_to(&mut preference);
+        assert!(!preference.subtitle_hearing_impaired);
+        PreferenceChange::Subtitle(None).apply_to(&mut preference);
+        assert!(!preference.subtitle_hearing_impaired);
     }
 
     #[test]
