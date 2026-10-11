@@ -45,6 +45,8 @@ pub struct HomePage {
 /// The featured "On Deck" item at the top of the page
 struct Hero {
     source_id: SourceId,
+    // Image request id of its backdrop
+    image_id: String,
     root: gtk::Overlay,
     backdrop: gtk::Picture,
 }
@@ -511,7 +513,8 @@ impl AsyncComponent for HomePage {
             HomePageInput::ImageLoaded { id, texture } => {
                 trace!("Image loaded for item: {}", id);
                 if id.starts_with(HERO_IMAGE_PREFIX) {
-                    if let Some(hero) = &self.hero {
+                    // A backdrop for an earlier featured item is dropped
+                    if let Some(hero) = self.hero.as_ref().filter(|hero| hero.image_id == id) {
                         hero.backdrop.set_paintable(Some(&texture));
                     }
                     return;
@@ -758,14 +761,15 @@ impl HomePage {
                         matches!(section.section_type, HomeSectionType::ContinueWatching)
                     })
                 })
-                .and_then(|section| section.items.first());
-            if let Some(item) = featured {
+                .and_then(|section| Some((section.title.clone(), section.items.first()?)));
+            if let Some((section_title, item)) = featured {
                 let parent_show = item
                     .parent_id
                     .as_ref()
                     .and_then(|parent_id| parent_shows_map.get(parent_id));
                 self.show_hero(
                     source_id,
+                    &section_title,
                     item,
                     parent_show,
                     playback_progress_map.get(&item.id),
@@ -1209,6 +1213,7 @@ impl HomePage {
     fn show_hero(
         &mut self,
         source_id: &SourceId,
+        section_title: &str,
         item: &MediaItemModel,
         parent_show: Option<&MediaItemModel>,
         progress: Option<&crate::db::entities::PlaybackProgressModel>,
@@ -1248,7 +1253,7 @@ impl HomePage {
                 .css_classes([class])
                 .build()
         };
-        content.append(&label("On Deck", "home-hero-eyebrow"));
+        content.append(&label(section_title, "home-hero-eyebrow"));
         let title = parent_show.map_or(&item.title, |show| &show.title);
         content.append(&label(title, "home-hero-title"));
         if parent_show.is_some() {
@@ -1315,12 +1320,13 @@ impl HomePage {
             .and_then(|show| show.backdrop_url.clone())
             .or_else(|| item.backdrop_url.clone())
             .filter(|url| !url.is_empty());
+        let image_id = format!("{}{}", HERO_IMAGE_PREFIX, item.id);
         if let Some(url) = backdrop_url {
             let _ = self
                 .image_loader
                 .sender()
                 .send(ImageLoaderInput::LoadImage(ImageRequest {
-                    id: format!("{}{}", HERO_IMAGE_PREFIX, item.id),
+                    id: image_id.clone(),
                     url,
                     size: ImageSize::Custom(1600, 900),
                     priority: 0,
@@ -1330,6 +1336,7 @@ impl HomePage {
         self.sections_container.prepend(&root);
         self.hero = Some(Hero {
             source_id: source_id.clone(),
+            image_id,
             root,
             backdrop,
         });
