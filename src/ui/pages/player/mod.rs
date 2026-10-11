@@ -853,8 +853,17 @@ impl AsyncComponent for PlayerPage {
             let _sender_for_escape = sender.clone();
             let sender_for_fullscreen_check = sender.clone();
             let key_controller = gtk::EventControllerKey::new();
+            // Handle shortcuts before the focused widget does, so space keeps
+            // pausing instead of re-activating the last clicked control button
+            key_controller.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let popover_count = model.active_popover_count.clone();
             key_controller.connect_key_pressed(move |_controller, key, _keycode, modifiers| {
                 use gtk::gdk::ModifierType;
+
+                // An open popover (track menus, sync spin buttons) gets the keys
+                if *popover_count.borrow() > 0 {
+                    return glib::Propagation::Proceed;
+                }
 
                 // Show controls on any keyboard input
                 sender.input(PlayerInput::MouseMove { x: 0.0, y: 0.0 });
