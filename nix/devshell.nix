@@ -129,6 +129,7 @@ let
 
   # Package building commands (Linux-only)
   buildDeb = pkgs.writeShellScriptBin "build-deb" ''
+    set -euo pipefail
     echo "Building Debian package..."
     echo "=============================="
 
@@ -138,7 +139,8 @@ let
 
     # Create debian package structure
     PKG_NAME="reel"
-    VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+    VERSION=$(grep -m1 "^version" Cargo.toml | cut -d'"' -f2)
+    ARCH=$(dpkg --print-architecture)
     DEB_DIR="target/debian/$PKG_NAME-$VERSION"
 
     echo "Creating package structure for $PKG_NAME version $VERSION..."
@@ -158,9 +160,7 @@ let
     fi
 
     # Copy icon
-    if [ -f data/icons/dev.arsfeld.Reel.svg ]; then
-      cp data/icons/dev.arsfeld.Reel.svg "$DEB_DIR/usr/share/icons/hicolor/scalable/apps/"
-    fi
+    cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg "$DEB_DIR/usr/share/icons/hicolor/scalable/apps/"
 
     # Create control file
     cat > "$DEB_DIR/DEBIAN/control" << EOF
@@ -168,7 +168,7 @@ let
     Version: $VERSION
     Section: video
     Priority: optional
-    Architecture: amd64
+    Architecture: $ARCH
     Depends: libgtk-4-1, libadwaita-1-0, libmpv2, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav
     Maintainer: Reel Development Team
     Description: A modern GTK frontend for Plex and other media servers
@@ -179,16 +179,17 @@ let
 
     # Build the package
     echo "Building .deb package..."
-    dpkg-deb --build "$DEB_DIR" "target/debian/$PKG_NAME-$VERSION.deb"
+    dpkg-deb --build "$DEB_DIR" "target/debian/$PKG_NAME-$VERSION-$ARCH.deb"
 
     echo ""
     echo "✓ Debian package built successfully!"
-    echo "  Package: target/debian/$PKG_NAME-$VERSION.deb"
+    echo "  Package: target/debian/$PKG_NAME-$VERSION-$ARCH.deb"
     echo ""
-    echo "To install: sudo dpkg -i target/debian/$PKG_NAME-$VERSION.deb"
+    echo "To install: sudo dpkg -i target/debian/$PKG_NAME-$VERSION-$ARCH.deb"
   '';
 
   buildRpm = pkgs.writeShellScriptBin "build-rpm" ''
+    set -euo pipefail
     echo "Building RPM package..."
     echo "=============================="
 
@@ -197,7 +198,7 @@ let
     cargo build --release
 
     PKG_NAME="reel"
-    VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+    VERSION=$(grep -m1 "^version" Cargo.toml | cut -d'"' -f2)
 
     # Create RPM build structure
     RPM_DIR="$HOME/rpmbuild"
@@ -239,7 +240,7 @@ let
 
     install -m 755 target/release/reel %{buildroot}%{_bindir}/reel
     install -m 644 data/dev.arsfeld.Reel.desktop %{buildroot}%{_datadir}/applications/
-    install -m 644 data/icons/dev.arsfeld.Reel.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/
+    install -m 644 data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/
 
     %files
     %{_bindir}/reel
@@ -257,7 +258,7 @@ let
 
     # Copy the built RPM to target directory
     mkdir -p target/rpm
-    cp "$RPM_DIR/RPMS/x86_64/$PKG_NAME-$VERSION-1"*.rpm target/rpm/ 2>/dev/null || true
+    cp "$RPM_DIR/RPMS/$(uname -m)/$PKG_NAME-$VERSION-1"*.rpm target/rpm/
 
     echo ""
     echo "✓ RPM package built successfully!"
@@ -267,13 +268,16 @@ let
   '';
 
   buildAppImage = pkgs.writeShellScriptBin "build-appimage" ''
+    set -euo pipefail
     echo "Building AppImage..."
     echo "=============================="
+
+    ARCH=$(uname -m)
 
     # Check for AppImage tools
     if ! command -v appimagetool &> /dev/null; then
       echo "Downloading appimagetool..."
-      wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O /tmp/appimagetool
+      wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-$ARCH.AppImage" -O /tmp/appimagetool
       chmod +x /tmp/appimagetool
       APPIMAGETOOL="/tmp/appimagetool"
     else
@@ -285,7 +289,7 @@ let
     cargo build --release
 
     PKG_NAME="reel"
-    VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+    VERSION=$(grep -m1 "^version" Cargo.toml | cut -d'"' -f2)
     APP_DIR="target/appimage/$PKG_NAME.AppDir"
 
     echo "Creating AppImage structure..."
@@ -306,17 +310,9 @@ let
       cp data/dev.arsfeld.Reel.desktop "$APP_DIR/"
     fi
 
-    # Copy icon
-    if [ -f data/icons/dev.arsfeld.Reel.svg ]; then
-      cp data/icons/dev.arsfeld.Reel.svg "$APP_DIR/usr/share/icons/hicolor/scalable/apps/"
-      # Convert SVG to PNG for AppImage icon
-      if command -v rsvg-convert &> /dev/null; then
-        rsvg-convert -w 256 -h 256 data/icons/dev.arsfeld.Reel.svg -o "$APP_DIR/dev.arsfeld.Reel.png"
-      else
-        # Fallback: just copy the SVG
-        cp data/icons/dev.arsfeld.Reel.svg "$APP_DIR/"
-      fi
-    fi
+    # Copy icon (also to root for AppImage)
+    cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg "$APP_DIR/usr/share/icons/hicolor/scalable/apps/"
+    cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg "$APP_DIR/"
 
     # Create AppRun script
     cat > "$APP_DIR/AppRun" << 'EOF'
@@ -335,16 +331,22 @@ let
 
     # Build AppImage
     echo "Building AppImage package..."
-    ARCH=x86_64 "$APPIMAGETOOL" "$APP_DIR" "target/appimage/$PKG_NAME-$VERSION-x86_64.AppImage"
+    # appimagetool names aarch64 "arm_aarch64"
+    case "$ARCH" in
+      aarch64) TOOL_ARCH=arm_aarch64 ;;
+      *) TOOL_ARCH=$ARCH ;;
+    esac
+    ARCH=$TOOL_ARCH "$APPIMAGETOOL" "$APP_DIR" "target/appimage/$PKG_NAME-$VERSION-$ARCH.AppImage"
 
     echo ""
     echo "✓ AppImage built successfully!"
-    echo "  Package: target/appimage/$PKG_NAME-$VERSION-x86_64.AppImage"
+    echo "  Package: target/appimage/$PKG_NAME-$VERSION-$ARCH.AppImage"
     echo ""
-    echo "To run: ./target/appimage/$PKG_NAME-$VERSION-x86_64.AppImage"
+    echo "To run: ./target/appimage/$PKG_NAME-$VERSION-$ARCH.AppImage"
   '';
 
   buildAllPackages = pkgs.writeShellScriptBin "build-all-packages" ''
+    set -euo pipefail
     echo "Building all package formats..."
     echo "================================"
     echo ""
