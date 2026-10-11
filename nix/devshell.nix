@@ -179,13 +179,13 @@ let
 
     # Build the package
     echo "Building .deb package..."
-    dpkg-deb --build "$DEB_DIR" "target/debian/$PKG_NAME-$VERSION.deb"
+    dpkg-deb --build "$DEB_DIR" "target/debian/$PKG_NAME-$VERSION-$ARCH.deb"
 
     echo ""
     echo "✓ Debian package built successfully!"
-    echo "  Package: target/debian/$PKG_NAME-$VERSION.deb"
+    echo "  Package: target/debian/$PKG_NAME-$VERSION-$ARCH.deb"
     echo ""
-    echo "To install: sudo dpkg -i target/debian/$PKG_NAME-$VERSION.deb"
+    echo "To install: sudo dpkg -i target/debian/$PKG_NAME-$VERSION-$ARCH.deb"
   '';
 
   buildRpm = pkgs.writeShellScriptBin "build-rpm" ''
