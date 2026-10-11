@@ -68,7 +68,7 @@ impl ReelApp {
         });
 
         // Create the Relm4 application and run it
-        let app = relm4::RelmApp::new("com.github.reel");
+        let app = relm4::RelmApp::new("dev.arsfeld.Reel");
         let main_window_init = (db, self.runtime.clone());
         app.with_args(vec![])
             .run_async::<MainWindow>(main_window_init);
