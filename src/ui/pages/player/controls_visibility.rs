@@ -20,19 +20,13 @@ pub(super) enum ControlState {
 /// Control visibility state machine implementation
 impl PlayerPage {
     /// Transition to the Hidden state
-    pub(super) fn transition_to_hidden(
-        &mut self,
-        _sender: AsyncComponentSender<Self>,
-        from_timer: bool,
-    ) {
+    pub(super) fn transition_to_hidden(&mut self, _sender: AsyncComponentSender<Self>) {
         // Don't hide controls if a popover is open
         if *self.active_popover_count.borrow() > 0 {
             debug!("Popover is open, keeping controls visible");
             return;
         }
-        // Only try to cancel timer if not called from the timer itself
-        if !from_timer
-            && let ControlState::Visible { timer_id } = &mut self.control_state
+        if let ControlState::Visible { timer_id } = &mut self.control_state
             && let Some(timer) = timer_id.take()
         {
             let _ = timer.remove();

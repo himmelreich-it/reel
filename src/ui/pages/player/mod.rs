@@ -1742,7 +1742,7 @@ impl AsyncComponent for PlayerPage {
 
                 // Hide when leaving the window, unless paused
                 if self.player_state != PlayerState::Paused {
-                    self.transition_to_hidden(sender.clone(), false);
+                    self.transition_to_hidden(sender.clone());
                 }
             }
             PlayerInput::MouseMove { x, y } => {
@@ -1780,17 +1780,18 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::HideControls => {
-                // Called by inactivity timer. Controls stay up while paused;
-                // the restarted timer checks again.
+                // Called by the inactivity timer, which is gone once it fired:
+                // forget it so nothing tries to remove it again
+                let ControlState::Visible { timer_id } = &mut self.control_state else {
+                    // Hovering over the controls keeps them up
+                    return;
+                };
+                timer_id.take();
                 if self.player_state == PlayerState::Paused {
-                    if let ControlState::Visible { timer_id } = &mut self.control_state {
-                        // The timer that fired is already gone; don't remove it again
-                        timer_id.take();
-                        self.transition_to_visible(sender.clone());
-                    }
-                } else if matches!(self.control_state, ControlState::Visible { .. }) {
-                    // Only hide if we're in Visible state (not Hovering)
-                    self.transition_to_hidden(sender.clone(), true);
+                    // Controls stay up while paused; the restarted timer checks again
+                    self.transition_to_visible(sender.clone());
+                } else {
+                    self.transition_to_hidden(sender.clone());
                 }
             }
             PlayerInput::PointerOverControls(over) => {
@@ -2025,7 +2026,7 @@ impl AsyncComponent for PlayerPage {
                         self.transition_to_visible(sender.clone());
                     }
                     _ => {
-                        self.transition_to_hidden(sender.clone(), false);
+                        self.transition_to_hidden(sender.clone());
                     }
                 }
             }
