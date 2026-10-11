@@ -114,23 +114,4 @@ impl PlayerPage {
             true // First movement always exceeds threshold
         }
     }
-
-    /// Check if mouse is over control widgets
-    pub(super) fn is_mouse_over_controls(&self, _x: f64, y: f64) -> bool {
-        // For now use the heuristic approach, but this should be replaced
-        // with actual widget bounds checking when controls_overlay is properly set
-        if let Some(controls) = &self.controls_overlay {
-            // Get the height of the controls overlay
-            let controls_height = controls.height() as f64;
-            let window_height = self.window.height() as f64;
-
-            // Check if y position is within control bounds
-            // Controls are at the bottom of the window
-            y >= (window_height - controls_height - 50.0) // Add some padding
-        } else {
-            // Fallback to heuristic: bottom 20% of window
-            let window_height = self.window.height() as f64;
-            y >= window_height * 0.8
-        }
-    }
 }

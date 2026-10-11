@@ -1,543 +1,184 @@
-/* Player OSD Controls Styling */
+/* Player page. Every rule is scoped to .player-page so nothing leaks into
+   the rest of the app. */
 
-/* Video container background */
-.video-container,
-.video-area {
+.player-page .video-area {
     background-color: black;
 }
 
-/* OSD overlay controls base style - Ultra minimal */
-.osd {
-    background: rgba(10, 10, 10, 0.8);
-    border-radius: 8px;
-    padding: 6px;
-    margin: 4px;
-    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
-    border: 1px solid rgba(255, 255, 255, 0.03);
+/* Scrims: gradients that carry the controls over the video */
+.player-page .player-scrim-top {
+    padding: 24px 32px 48px 32px;
+    background-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0));
 }
 
-/* OSD circular buttons - compact and minimal */
-.osd.circular {
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.05);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
-    transition: all 150ms ease;
-    min-width: 32px;
-    min-height: 32px;
-    padding: 6px;
-    border-radius: 50%;
-    color: rgba(255, 255, 255, 0.8);
+.player-page .player-scrim-bottom {
+    padding: 96px 48px 28px 48px;
+    background-image: linear-gradient(
+        to top,
+        rgba(0, 0, 0, 0.88) 0%,
+        rgba(0, 0, 0, 0.6) 45%,
+        rgba(0, 0, 0, 0) 100%
+    );
 }
 
-.osd.circular:hover {
-    background: rgba(255, 255, 255, 0.1);
-    border-color: rgba(255, 255, 255, 0.08);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
-    transform: scale(1.05);
-}
-
-.osd.circular:active {
-    transform: scale(0.98);
-}
-
-/* OSD pill buttons (Skip Intro/Credits) - compact */
-.osd.pill {
-    background-color: rgba(0, 0, 0, 0.75);
-    border-radius: 18px;
-    padding: 8px 16px;
-    color: rgba(255, 255, 255, 0.9);
+/* Title above the seek bar */
+.player-page .player-title-eyebrow {
+    font-size: 14px;
     font-weight: 500;
+    color: rgba(255, 255, 255, 0.72);
+}
+
+.player-page .player-title {
+    font-size: 24px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: white;
+}
+
+/* Elapsed and remaining time */
+.player-page .player-time {
     font-size: 13px;
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    transition: all 200ms ease;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    font-weight: 500;
+    font-feature-settings: "tnum";
+    color: rgba(255, 255, 255, 0.85);
 }
 
-.osd.pill:hover {
-    background-color: rgba(0, 0, 0, 0.85);
-    border-color: rgba(255, 255, 255, 0.3);
-    transform: scale(1.03);
-    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.5);
+/* Seek bar: 4px track, accent fill, white knob */
+.player-page .player-seek-bar {
+    padding: 8px 0;
 }
 
-/* Player controls container - ultra compact */
-.player-controls {
-    background: rgba(12, 12, 12, 0.85);
-    border-radius: 10px;
-    padding: 8px 12px;
-    box-shadow: 0 2px 16px rgba(0, 0, 0, 0.5);
-    border: 1px solid rgba(255, 255, 255, 0.04);
-}
-
-.player-controls.minimal {
-    background: rgba(10, 10, 10, 0.8);
-    border-radius: 8px;
-    padding: 6px 10px;
-    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
-}
-
-/* Progress bar - ultra thin */
-.player-controls .progress-bar {
-    min-height: 2px;
-    transition: all 200ms ease;
-    margin: 2px 0;
-}
-
-.player-controls .progress-bar trough {
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 1px;
-    min-height: 2px;
-}
-
-.player-controls .progress-bar highlight {
-    background: rgba(255, 255, 255, 0.8);
-    border-radius: 1px;
-    min-height: 2px;
-}
-
-.player-controls .progress-bar slider {
-    min-width: 0;
-    min-height: 0;
-    background: rgba(255, 255, 255, 1);
-    border-radius: 50%;
-    margin: 0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
-    opacity: 0;
-}
-
-.player-controls .progress-bar:hover {
+.player-page .player-seek-bar trough {
     min-height: 4px;
+    border-radius: 2px;
+    background-color: rgba(255, 255, 255, 0.22);
 }
 
-.player-controls .progress-bar:hover trough {
+.player-page .player-seek-bar highlight {
     min-height: 4px;
-    background: rgba(255, 255, 255, 0.08);
+    border-radius: 2px;
+    background-color: @accent_bg_color;
 }
 
-.player-controls .progress-bar:hover highlight {
-    min-height: 4px;
-    background: rgba(255, 255, 255, 0.85);
+.player-page .player-seek-bar slider {
+    min-width: 14px;
+    min-height: 14px;
+    margin: -5px;
+    border-radius: 7px;
+    background-color: white;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
 }
 
-.player-controls .progress-bar:hover slider {
+/* Volume slider: 3px track, white fill */
+.player-page .player-volume-slider {
+    padding: 8px 0;
+}
+
+.player-page .player-volume-slider trough {
+    min-height: 3px;
+    border-radius: 2px;
+    background-color: rgba(255, 255, 255, 0.25);
+}
+
+.player-page .player-volume-slider highlight {
+    min-height: 3px;
+    border-radius: 2px;
+    background-color: white;
+}
+
+.player-page .player-volume-slider slider {
     min-width: 12px;
     min-height: 12px;
-    margin: -4.5px 0;
-    opacity: 1;
-}
-
-/* Seek bar styling - ultra thin */
-.seek-bar {
-    opacity: 1;
-    transition: all 200ms ease;
-}
-
-.seek-bar trough {
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 1px;
-    min-height: 2px;
-}
-
-.seek-bar:hover trough {
-    background: rgba(255, 255, 255, 0.08);
-    min-height: 4px;
-}
-
-.seek-bar highlight {
-    background: rgba(255, 255, 255, 0.8);
-    border-radius: 1px;
-    min-height: 2px;
-}
-
-.seek-bar:hover highlight {
-    min-height: 4px;
-    background: rgba(255, 255, 255, 0.85);
-}
-
-.seek-bar slider {
-    background: rgba(255, 255, 255, 1);
-    border-radius: 50%;
-    min-width: 0;
-    min-height: 0;
-    margin: 0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-    transition: all 150ms ease;
-    opacity: 0;
-}
-
-.seek-bar:hover {
-    min-height: 4px;
-}
-
-.seek-bar:hover slider {
-    min-width: 10px;
-    min-height: 10px;
-    margin: -4px 0;
-    opacity: 1;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-}
-
-/* Time labels - readable typography */
-.player-controls .dim-label {
-    font-size: 12px;
-    font-weight: 500;
-    color: rgba(255, 255, 255, 0.65);
-    letter-spacing: 0.3px;
-    font-family:
-        -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto,
-        sans-serif;
-}
-
-.player-controls label.numeric {
-    color: rgba(255, 255, 255, 0.8);
-    font-weight: 500;
-    font-size: 13px;
-    font-variant-numeric: tabular-nums;
-}
-
-/* Flat buttons in controls - ultra minimal */
-.player-controls button.flat {
-    min-width: 28px;
-    min-height: 28px;
-    padding: 4px;
-    margin: 0 1px;
-    color: rgba(255, 255, 255, 0.7);
-    background: transparent;
-    border: none;
-    box-shadow: none;
+    margin: -5px;
     border-radius: 6px;
-    transition: all 120ms ease;
-    opacity: 0.8;
-}
-
-.player-controls button.flat:hover {
-    background: rgba(255, 255, 255, 0.05);
-    color: rgba(255, 255, 255, 0.9);
-    opacity: 1;
-}
-
-.player-controls button.flat:active {
-    transform: scale(0.98);
-    background: rgba(255, 255, 255, 0.1);
-}
-
-/* Play/pause button container - enforces square aspect ratio */
-.play-pause-container {
-    min-width: 36px;
-    min-height: 36px;
-    padding: 0;
-    margin: 0;
-}
-
-/* Play/pause button - sleek and minimal */
-.play-pause-button {
-    min-width: 36px;
-    min-height: 36px;
-    border-radius: 50%;
-    padding: 0;
-    margin: 0;
-    background: rgba(255, 255, 255, 0.08);
-    border: none;
-    transition: all 150ms ease;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-    color: rgba(255, 255, 255, 0.9);
-}
-
-.play-pause-button:hover {
-    background: rgba(255, 255, 255, 0.12);
-    transform: scale(1.05);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.25);
-    color: rgba(255, 255, 255, 0.95);
-}
-
-.play-pause-button:active {
-    transform: scale(0.98);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-    background: rgba(255, 255, 255, 0.06);
-}
-
-/* Ensure play/pause icon is centered and properly sized */
-.play-pause-button image {
-    margin: 0;
-    padding: 0;
-    min-width: 16px;
-    min-height: 16px;
-}
-
-/* Other circular buttons (not play/pause) */
-.player-controls button.circular:not(.play-pause-button),
-button.circular:not(.play-pause-button) {
-    border-radius: 50%;
-    min-width: 34px;
-    min-height: 34px;
-    padding: 0;
-    background: rgba(255, 255, 255, 0.06);
-    border: none;
-    transition: all 150ms ease;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
-    color: rgba(255, 255, 255, 0.85);
-}
-
-.player-controls button.circular:not(.play-pause-button):hover,
-button.circular:not(.play-pause-button):hover {
-    background: rgba(255, 255, 255, 0.1);
-    transform: scale(1.05);
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
-    color: rgba(255, 255, 255, 0.95);
-}
-
-.player-controls button.circular:not(.play-pause-button):active,
-button.circular:not(.play-pause-button):active {
-    transform: scale(0.98);
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
-    background: rgba(255, 255, 255, 0.05);
-}
-
-/* Ensure other circular button icons are centered */
-.player-controls button.circular:not(.play-pause-button) image,
-button.circular:not(.play-pause-button) image {
-    margin: 0;
-    padding: 0;
-    min-width: 16px;
-    min-height: 16px;
-}
-
-/* Fullscreen styling */
-.fullscreen {
-    background-color: black;
-}
-
-.fullscreen .video-container {
-    background-color: black;
-}
-
-.fullscreen .player-controls {
-    margin-bottom: 40px;
-}
-
-/* Volume slider - ultra compact */
-.volume-slider {
-    min-height: 2px;
-    transition: all 150ms ease;
-}
-
-.volume-slider trough {
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 1px;
-    min-height: 2px;
-}
-
-.volume-slider highlight {
-    background: rgba(255, 255, 255, 0.7);
-    border-radius: 1px;
-    min-height: 2px;
-}
-
-.volume-slider slider {
-    min-width: 8px;
-    min-height: 8px;
-    background: rgba(255, 255, 255, 0.9);
-    border-radius: 50%;
-    margin: -3px 0;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-    transition: all 120ms ease;
-}
-
-.volume-slider:hover slider {
-    min-width: 10px;
-    min-height: 10px;
-    margin: -4px 0;
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
-}
-
-/* Volume button */
-volumebutton {
-    opacity: 0.9;
-}
-
-volumebutton:hover {
-    opacity: 1;
-}
-
-volumebutton button {
-    background: transparent;
-    border: none;
-}
-
-volumebutton scale {
-    min-width: 100px;
-}
-
-/* OSD overlay wrapper for smooth transitions */
-.osd-overlay {
-    transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.osd-overlay.controls-visible {
-    transform: translateY(0);
-    opacity: 1;
-    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.osd-overlay.controls-hidden {
-    transform: translateY(8px);
-    opacity: 0;
-    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-/* Smooth fade animations for fullscreen mode */
-@keyframes fadeInControls {
-    from {
-        opacity: 0;
-        transform: translateY(12px);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0);
-    }
-}
-
-@keyframes fadeOutControls {
-    from {
-        opacity: 1;
-        transform: translateY(0);
-    }
-    to {
-        opacity: 0;
-        transform: translateY(8px);
-    }
-}
-
-/* Apply fade animations in fullscreen */
-.fullscreen .osd-overlay.controls-visible {
-    animation: fadeInControls 250ms ease-out;
-}
-
-.fullscreen .osd-overlay.controls-hidden {
-    animation: fadeOutControls 200ms ease-in;
-}
-
-/* Player controls container animations */
-.player-controls.fade-in {
-    animation: fadeInControls 200ms ease-out;
-}
-
-.player-controls.fade-out {
-    animation: fadeOutControls 150ms ease-in;
-}
-
-/* Top controls positioning - compact */
-.player-controls-top {
-    padding: 8px;
-}
-
-/* Back button and close button - minimalistic round */
-.player-controls-top button,
-.osd-top-bar button {
-    border-radius: 50%;
-    min-width: 32px;
-    min-height: 32px;
-    padding: 0;
-    margin: 4px;
-    background: rgba(20, 20, 22, 0.8);
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    color: rgba(255, 255, 255, 0.8);
-    transition: all 150ms ease;
-}
-
-.player-controls-top button:hover,
-.osd-top-bar button:hover {
-    background: rgba(30, 30, 32, 0.9);
-    border-color: rgba(255, 255, 255, 0.1);
-    color: rgba(255, 255, 255, 0.95);
-    transform: scale(1.05);
-}
-
-.player-controls-top button image,
-.osd-top-bar button image {
-    margin: 0;
-    padding: 0;
-}
-
-/* Ensure icons are visible and crisp */
-.osd button image,
-.player-controls button image,
-.player-controls menubutton image {
-    color: rgba(255, 255, 255, 0.85);
-    opacity: 1;
-}
-
-.osd button:hover image,
-.player-controls button:hover image,
-.player-controls menubutton:hover image {
-    color: rgba(255, 255, 255, 0.95);
-    opacity: 1;
-}
-
-/* Remove default button backgrounds in OSD context */
-.osd button.flat {
-    background: transparent;
-    border: none;
+    background-color: white;
     box-shadow: none;
 }
 
-/* Menu buttons styling - compact */
-.player-controls menubutton {
-    min-width: 32px;
-    min-height: 32px;
-    padding: 4px;
-    margin: 0 1px;
-    border-radius: 6px;
-    transition: all 150ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.player-controls menubutton button {
-    background: transparent;
-    border: none;
-    box-shadow: none;
-    color: rgba(255, 255, 255, 0.75);
-    min-width: 32px;
-    min-height: 32px;
-    padding: 4px;
-    border-radius: 6px;
-}
-
-.player-controls menubutton:hover button {
-    background: rgba(255, 255, 255, 0.06);
-    color: rgba(255, 255, 255, 0.9);
-}
-
-.player-controls menubutton popover {
-    background: rgba(24, 24, 26, 0.95);
-    border-radius: 10px;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-}
-
-/* Separator styling */
-.player-controls separator {
-    background: rgba(255, 255, 255, 0.1);
-    min-width: 1px;
-}
-
-/* Loading overlay */
-.loading-overlay {
-    background: rgba(0, 0, 0, 0.85);
-    border-radius: 12px;
-    padding: 40px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-}
-
-.loading-overlay spinner {
+/* Round 44px icon buttons */
+.player-page .player-button,
+.player-page .player-button > button {
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border-radius: 22px;
     color: white;
-    min-width: 48px;
-    min-height: 48px;
+    background-color: transparent;
+    box-shadow: none;
+}
+
+.player-page .player-button:hover,
+.player-page .player-button > button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.player-page .player-button > button:checked {
+    background-color: rgba(255, 255, 255, 0.16);
+}
+
+.player-page .player-button:disabled,
+.player-page .player-button > button:disabled {
+    color: rgba(255, 255, 255, 0.35);
+}
+
+.player-page .player-button.raised {
+    background-color: rgba(255, 255, 255, 0.12);
+}
+
+.player-page .player-button.raised:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+.player-page .player-button image,
+.player-page .player-button > button image {
+    -gtk-icon-size: 20px;
+}
+
+/* Play/pause: solid white 60px circle */
+.player-page .player-play-button {
+    min-width: 60px;
+    min-height: 60px;
+    margin: 0 8px;
+    padding: 0;
+    border-radius: 30px;
+    color: #111111;
+    background-color: white;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.35);
+}
+
+.player-page .player-play-button:hover {
+    background-color: rgba(255, 255, 255, 0.88);
+}
+
+.player-page .player-play-button image {
+    -gtk-icon-size: 24px;
+}
+
+/* Menus opened from the controls */
+.player-page popover > contents {
+    border-radius: 12px;
+    padding: 6px;
+    background-color: rgba(36, 36, 40, 0.97);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+}
+
+/* Skip intro / credits */
+.player-page .player-skip-button {
+    padding: 8px 18px;
+    border-radius: 20px;
+    font-weight: 600;
+    color: white;
+    background-color: rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.player-page .player-skip-button:hover {
+    background-color: rgba(0, 0, 0, 0.8);
 }
 
 /* Buffering overlay */
-.buffering-overlay {
+.player-page .buffering-overlay {
     background: rgba(0, 0, 0, 0.9);
     border-radius: 12px;
     padding: 32px;
@@ -545,91 +186,60 @@ volumebutton scale {
     min-width: 280px;
 }
 
-.buffering-spinner {
+.player-page .buffering-spinner {
     color: rgba(255, 255, 255, 0.9);
     opacity: 0.9;
 }
 
-.buffering-percentage {
+.player-page .buffering-percentage {
     color: rgba(255, 255, 255, 0.95);
     font-weight: 600;
     font-size: 20px;
 }
 
-.download-speed,
-.download-progress,
-.active-downloads {
+.player-page .download-speed,
+.player-page .download-progress,
+.player-page .active-downloads {
     font-size: 13px;
     color: rgba(255, 255, 255, 0.7);
     font-variant-numeric: tabular-nums;
 }
 
-/* Performance warnings in buffering overlay */
-.performance-warnings {
+.player-page .performance-warnings {
     padding-top: 8px;
     border-top: 1px solid rgba(255, 255, 255, 0.1);
     margin-top: 8px;
 }
 
-.warning-icon {
+.player-page .warning-icon {
     color: rgba(255, 200, 50, 0.9);
 }
 
-.warning-icon-critical {
+.player-page .warning-icon-critical {
     color: rgba(255, 100, 100, 0.9);
 }
 
-.warning-message {
+.player-page .warning-message {
     font-size: 13px;
     color: rgba(255, 255, 255, 0.85);
     font-weight: 500;
 }
 
-.warning-recommendation {
+.player-page .warning-recommendation {
     font-size: 12px;
     color: rgba(255, 255, 255, 0.6);
 }
 
 /* Error overlay */
-.error-overlay {
+.player-page .error-overlay {
     background: rgba(0, 0, 0, 0.9);
     border-radius: 12px;
     padding: 40px;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
 }
 
-/* Auto-play overlay */
-.auto-play-overlay {
-    background-color: rgba(0, 0, 0, 0.9);
-    border-radius: 10px;
-    padding: 30px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
-}
-
-/* Picture-in-picture container */
-.pip-container {
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    border-radius: 8px;
-    background-color: black;
-    min-width: 320px;
-    min-height: 180px;
-}
-
-/* Force all circular buttons to maintain aspect ratio */
-button.circular,
-.circular,
-.player-controls .circular {
-    -gtk-icon-size: 16px;
-}
-
-/* Specific override for GTK button internals */
-button.circular > *,
-.circular > * {
-    min-width: inherit;
-    min-height: inherit;
-}
 /* Short feedback messages over the video (e.g. delay changes) */
-.player-osd-message {
+.player-page .player-osd-message {
     background-color: rgba(0, 0, 0, 0.7);
     color: white;
     border-radius: 8px;
