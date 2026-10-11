@@ -139,6 +139,7 @@ let
     # Create debian package structure
     PKG_NAME="reel"
     VERSION=$(grep "^version" Cargo.toml | head -1 | cut -d'"' -f2)
+    ARCH=$(dpkg --print-architecture)
     DEB_DIR="target/debian/$PKG_NAME-$VERSION"
 
     echo "Creating package structure for $PKG_NAME version $VERSION..."
@@ -158,9 +159,7 @@ let
     fi
 
     # Copy icon
-    if [ -f data/icons/dev.arsfeld.Reel.svg ]; then
-      cp data/icons/dev.arsfeld.Reel.svg "$DEB_DIR/usr/share/icons/hicolor/scalable/apps/"
-    fi
+    cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg "$DEB_DIR/usr/share/icons/hicolor/scalable/apps/"
 
     # Create control file
     cat > "$DEB_DIR/DEBIAN/control" << EOF
@@ -168,7 +167,7 @@ let
     Version: $VERSION
     Section: video
     Priority: optional
-    Architecture: amd64
+    Architecture: $ARCH
     Depends: libgtk-4-1, libadwaita-1-0, libmpv2, gstreamer1.0-plugins-base, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, gstreamer1.0-libav
     Maintainer: Reel Development Team
     Description: A modern GTK frontend for Plex and other media servers
