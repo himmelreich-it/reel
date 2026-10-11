@@ -187,6 +187,25 @@ impl PlayerPage {
             return;
         }
 
+        // Languages take effect for the next file, subtitle styling immediately
+        if let Some(ref player) = self.player {
+            let player_handle = player.clone();
+            let audio_language = config.playback.preferred_audio_language.clone();
+            let subtitle_language = config.playback.preferred_subtitle_language.clone();
+            let subtitle_style = config.playback.subtitle_style();
+            glib::spawn_future_local(async move {
+                if let Err(err) = player_handle
+                    .set_track_languages(&audio_language, &subtitle_language)
+                    .await
+                {
+                    warn!("Failed to update preferred track languages: {}", err);
+                }
+                if let Err(err) = player_handle.set_subtitle_style(subtitle_style).await {
+                    warn!("Failed to update subtitle style: {}", err);
+                }
+            });
+        }
+
         if self.is_mpv_backend {
             let new_mode = Self::mpv_upscaling_mode_from_config(config);
             if new_mode != self.current_upscaling_mode {

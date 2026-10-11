@@ -1,7 +1,9 @@
+use crate::config::Config;
 use crate::player::ZoomMode;
 use crate::player::gstreamer::bus_handler;
 use crate::player::gstreamer::sink_factory;
 use crate::player::gstreamer::stream_manager::StreamManager;
+use crate::player::types::{SubtitleStyle, TrackInfo};
 use anyhow::{Context, Result};
 use gdk4 as gdk;
 use gstreamer as gst;
@@ -42,10 +44,20 @@ pub struct GStreamerPlayer {
     bus_watch_guard: Arc<Mutex<Option<BusWatchGuard>>>,
     current_playback_speed: Arc<Mutex<f64>>,
     paused_for_buffering: Arc<Mutex<bool>>,
+    subtitle_font_desc: Arc<Mutex<String>>,
+}
+
+/// Pango font description for a subtitle style.
+///
+/// The style's size follows mpv's scale (default 38); GStreamer's text
+/// overlay takes points, where 18 is the equivalent default.
+fn subtitle_font_desc(style: &SubtitleStyle) -> String {
+    let points = (style.font_size as f64 * 18.0 / 38.0).round() as u32;
+    format!("Sans, {}", points.max(1))
 }
 
 impl GStreamerPlayer {
-    pub fn new() -> Result<Self> {
+    pub fn new(config: &Config) -> Result<Self> {
         debug!("Initializing GStreamer player");
 
         // Initialize GStreamer if not already done
@@ -81,6 +93,9 @@ impl GStreamerPlayer {
             bus_watch_guard: Arc::new(Mutex::new(None)),
             current_playback_speed: Arc::new(Mutex::new(1.0)),
             paused_for_buffering: Arc::new(Mutex::new(false)),
+            subtitle_font_desc: Arc::new(Mutex::new(subtitle_font_desc(
+                &config.playback.subtitle_style(),
+            ))),
         })
     }
 
@@ -338,8 +353,9 @@ impl GStreamerPlayer {
         }
 
         if playbin.has_property("subtitle-font-desc") {
-            playbin.set_property_from_str("subtitle-font-desc", "Sans, 18");
-            info!("Set subtitle font to Sans, 18");
+            let font_desc = self.subtitle_font_desc.lock().unwrap().clone();
+            playbin.set_property("subtitle-font-desc", &font_desc);
+            info!("Set subtitle font to {}", font_desc);
         }
 
         // Use our stored video sink if available
@@ -761,12 +777,12 @@ impl GStreamerPlayer {
         self.state.read().await.clone()
     }
 
-    pub async fn get_audio_tracks(&self) -> Vec<(i32, String)> {
+    pub async fn get_audio_tracks(&self) -> Vec<TrackInfo> {
         let playbin = self.playbin.lock().unwrap();
         self.stream_manager.get_audio_tracks(playbin.as_ref())
     }
 
-    pub async fn get_subtitle_tracks(&self) -> Vec<(i32, String)> {
+    pub async fn get_subtitle_tracks(&self) -> Vec<TrackInfo> {
         self.stream_manager.get_subtitle_tracks()
     }
 
@@ -784,6 +800,36 @@ impl GStreamerPlayer {
         } else {
             Err(anyhow::anyhow!("No playbin available"))
         }
+    }
+
+    /// Only the font size applies here; colour, outline and background are mpv features.
+    pub async fn set_subtitle_style(&self, style: SubtitleStyle) -> Result<()> {
+        let font_desc = subtitle_font_desc(&style);
+        if let Some(playbin) = self.playbin.lock().unwrap().as_ref() {
+            playbin.set_property("subtitle-font-desc", &font_desc);
+        }
+        *self.subtitle_font_desc.lock().unwrap() = font_desc;
+        Ok(())
+    }
+
+    /// Delay audio relative to video, in seconds (negative plays audio earlier).
+    pub async fn set_audio_delay(&self, seconds: f64) -> Result<()> {
+        // playbin's av-offset is positive when audio runs ahead of video
+        self.set_offset_property("av-offset", -seconds)
+    }
+
+    /// Delay subtitles relative to video, in seconds (negative shows them earlier).
+    pub async fn set_subtitle_delay(&self, seconds: f64) -> Result<()> {
+        // playbin's text-offset is positive when text runs ahead of video
+        self.set_offset_property("text-offset", -seconds)
+    }
+
+    fn set_offset_property(&self, property: &str, seconds: f64) -> Result<()> {
+        let Some(playbin) = self.playbin.lock().unwrap().clone() else {
+            return Err(anyhow::anyhow!("No playbin available"));
+        };
+        playbin.set_property(property, (seconds * 1_000_000_000.0).round() as i64);
+        Ok(())
     }
 
     pub async fn get_current_audio_track(&self) -> i32 {

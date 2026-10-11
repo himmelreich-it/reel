@@ -66,6 +66,27 @@ pub struct PlaybackConfig {
 
     #[serde(default = "default_minimum_marker_duration")]
     pub minimum_marker_duration_seconds: u32,
+
+    /// ISO 639-1 code of the preferred audio language, empty for the file default
+    #[serde(default = "default_audio_language")]
+    pub preferred_audio_language: String,
+
+    /// ISO 639-1 code of the preferred subtitle language, empty for the file default
+    #[serde(default)]
+    pub preferred_subtitle_language: String,
+
+    #[serde(default = "default_subtitle_font_size")]
+    pub subtitle_font_size: u32,
+
+    /// Subtitle text colour as `#RRGGBB`
+    #[serde(default = "default_subtitle_color")]
+    pub subtitle_color: String,
+
+    #[serde(default = "default_subtitle_border_size")]
+    pub subtitle_border_size: f64,
+
+    #[serde(default)]
+    pub subtitle_background: bool,
 }
 
 fn default_true() -> bool {
@@ -74,6 +95,34 @@ fn default_true() -> bool {
 
 fn default_minimum_marker_duration() -> u32 {
     5
+}
+
+fn default_audio_language() -> String {
+    "en".to_string()
+}
+
+// mpv's defaults (0.38+), which are scaled to a 1080 line window
+fn default_subtitle_font_size() -> u32 {
+    38
+}
+
+fn default_subtitle_color() -> String {
+    "#FFFFFF".to_string()
+}
+
+fn default_subtitle_border_size() -> f64 {
+    1.65
+}
+
+impl PlaybackConfig {
+    pub fn subtitle_style(&self) -> crate::player::types::SubtitleStyle {
+        crate::player::types::SubtitleStyle {
+            font_size: self.subtitle_font_size,
+            color: self.subtitle_color.clone(),
+            border_size: self.subtitle_border_size,
+            background: self.subtitle_background,
+        }
+    }
 }
 
 impl Default for PlaybackConfig {
@@ -94,6 +143,12 @@ impl Default for PlaybackConfig {
             auto_skip_intro: false,
             auto_skip_credits: false,
             minimum_marker_duration_seconds: 5,
+            preferred_audio_language: default_audio_language(),
+            preferred_subtitle_language: String::new(),
+            subtitle_font_size: default_subtitle_font_size(),
+            subtitle_color: default_subtitle_color(),
+            subtitle_border_size: default_subtitle_border_size(),
+            subtitle_background: false,
         }
     }
 }

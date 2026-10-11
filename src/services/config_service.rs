@@ -155,6 +155,17 @@ impl ConfigService {
         Ok(())
     }
 
+    /// Change playback settings, saving and broadcasting only when something changed
+    pub async fn update_playback(&self, change: impl FnOnce(&mut PlaybackConfig)) -> Result<()> {
+        let mut config = self.get_config().await;
+        let before = config.playback.clone();
+        change(&mut config.playback);
+        if config.playback != before {
+            self.update_config(config).await?;
+        }
+        Ok(())
+    }
+
     /// Get playback configuration
     pub async fn get_playback_config(&self) -> PlaybackConfig {
         self.config.read().await.playback.clone()

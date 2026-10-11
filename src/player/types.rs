@@ -66,3 +66,37 @@ impl Default for ZoomMode {
         Self::Fit
     }
 }
+
+/// An audio or subtitle track as reported by a player backend.
+///
+/// `id` is backend specific (mpv ids are 1-based, GStreamer indices 0-based),
+/// so anything persisted must use `language` and `title` instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TrackInfo {
+    pub id: i32,
+    pub name: String,
+    pub language: Option<String>,
+    pub title: Option<String>,
+}
+
+impl TrackInfo {
+    /// The "no subtitles" entry that heads every subtitle track list.
+    pub fn subtitles_off() -> Self {
+        Self {
+            id: -1,
+            name: "None".to_string(),
+            language: None,
+            title: None,
+        }
+    }
+}
+
+/// Styling applied to text subtitles (ASS subtitles keep their own styling).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubtitleStyle {
+    pub font_size: u32,
+    /// Text colour as `#RRGGBB`.
+    pub color: String,
+    pub border_size: f64,
+    pub background: bool,
+}

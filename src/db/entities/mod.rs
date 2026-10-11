@@ -16,6 +16,7 @@ pub mod playback_progress;
 pub mod playback_sync_queue;
 pub mod sources;
 pub mod sync_status;
+pub mod track_preferences;
 
 // Re-export entities for convenience
 pub use auth_tokens::{
@@ -69,4 +70,8 @@ pub use playback_sync_queue::{
 pub use sources::{ActiveModel as SourceActiveModel, Entity as Source, Model as SourceModel};
 pub use sync_status::{
     ActiveModel as SyncStatusActiveModel, Entity as SyncStatus, Model as SyncStatusModel,
+};
+pub use track_preferences::{
+    ActiveModel as TrackPreferenceActiveModel, Entity as TrackPreference,
+    Model as TrackPreferenceModel,
 };

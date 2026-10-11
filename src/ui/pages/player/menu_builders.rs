@@ -7,144 +7,167 @@ use tracing::debug;
 
 use super::{PlayerInput, PlayerPage};
 
+#[derive(Clone, Copy)]
+enum TrackKind {
+    Audio,
+    Subtitle,
+}
+
+impl TrackKind {
+    fn action_prefix(self) -> &'static str {
+        match self {
+            TrackKind::Audio => "audio",
+            TrackKind::Subtitle => "subtitle",
+        }
+    }
+}
+
 /// Menu population methods for audio/subtitle/zoom/quality menus
 impl PlayerPage {
     pub(super) fn populate_audio_menu(&self, sender: AsyncComponentSender<Self>) {
-        if let Some(player) = &self.player {
-            let player_clone = player.clone();
-            let audio_menu_button = self.audio_menu_button.clone();
-            let _current_track = self.current_audio_track;
-            let sender = sender.clone();
-            let popover_count = self.active_popover_count.clone();
-
-            glib::spawn_future_local(async move {
-                let tracks = player_clone.get_audio_tracks().await.unwrap_or_default();
-
-                if tracks.is_empty() {
-                    // No audio tracks available, disable the button
-                    audio_menu_button.set_sensitive(false);
-                    audio_menu_button.set_popover(None::<&gtk::Popover>);
-                } else {
-                    audio_menu_button.set_sensitive(true);
-
-                    // Create menu
-                    let menu = gtk::gio::Menu::new();
-
-                    for (track_id, track_name) in &tracks {
-                        let item = gtk::gio::MenuItem::new(Some(track_name), None);
-                        let action_name = format!("player.audio-track-{}", track_id);
-                        item.set_action_and_target_value(Some(&action_name), None);
-                        menu.append_item(&item);
-                    }
-
-                    // Create popover from menu model
-                    let popover = gtk::PopoverMenu::from_model(Some(&menu));
-
-                    // Track popover state to prevent control hiding
-                    let popover_count_clone = popover_count.clone();
-                    popover.connect_show(move |_| {
-                        *popover_count_clone.borrow_mut() += 1;
-                        debug!(
-                            "Audio popover shown, count: {}",
-                            *popover_count_clone.borrow()
-                        );
-                    });
-                    popover.connect_hide(move |_| {
-                        let mut count = popover_count.borrow_mut();
-                        if *count > 0 {
-                            *count -= 1;
-                        }
-                        debug!("Audio popover hidden, count: {}", *count);
-                    });
-
-                    // Add actions for each track
-                    let action_group = gtk::gio::SimpleActionGroup::new();
-                    for (track_id, _) in &tracks {
-                        let action_name = format!("audio-track-{}", track_id);
-                        let action = gtk::gio::SimpleAction::new(&action_name, None);
-                        let sender_clone = sender.clone();
-                        let track_id_copy = *track_id;
-                        action.connect_activate(move |_, _| {
-                            sender_clone.input(PlayerInput::SetAudioTrack(track_id_copy));
-                        });
-                        action_group.add_action(&action);
-                    }
-
-                    // Insert the action group
-                    audio_menu_button.insert_action_group("player", Some(&action_group));
-                    audio_menu_button.set_popover(Some(&popover));
-                }
-            });
-        }
+        self.populate_track_menu(TrackKind::Audio, sender);
     }
 
     pub(super) fn populate_subtitle_menu(&self, sender: AsyncComponentSender<Self>) {
-        if let Some(player) = &self.player {
-            let player_clone = player.clone();
-            let subtitle_menu_button = self.subtitle_menu_button.clone();
-            let _current_track = self.current_subtitle_track;
-            let sender = sender.clone();
-            let popover_count = self.active_popover_count.clone();
+        self.populate_track_menu(TrackKind::Subtitle, sender);
+    }
 
-            glib::spawn_future_local(async move {
-                let tracks = player_clone.get_subtitle_tracks().await.unwrap_or_default();
+    fn populate_track_menu(&self, kind: TrackKind, sender: AsyncComponentSender<Self>) {
+        let Some(player) = &self.player else {
+            return;
+        };
+        let player_clone = player.clone();
+        let menu_button = match kind {
+            TrackKind::Audio => self.audio_menu_button.clone(),
+            TrackKind::Subtitle => self.subtitle_menu_button.clone(),
+        };
+        let popover_count = self.active_popover_count.clone();
 
-                if tracks.is_empty() || tracks.len() == 1 {
-                    // No subtitle tracks available (only "None" option), disable the button
-                    subtitle_menu_button.set_sensitive(false);
-                    subtitle_menu_button.set_popover(None::<&gtk::Popover>);
-                } else {
-                    subtitle_menu_button.set_sensitive(true);
+        glib::spawn_future_local(async move {
+            let (tracks, current_track) = match kind {
+                TrackKind::Audio => (
+                    player_clone.get_audio_tracks().await.unwrap_or_default(),
+                    player_clone.get_current_audio_track().await.unwrap_or(-1),
+                ),
+                TrackKind::Subtitle => (
+                    player_clone.get_subtitle_tracks().await.unwrap_or_default(),
+                    player_clone
+                        .get_current_subtitle_track()
+                        .await
+                        .unwrap_or(-1),
+                ),
+            };
 
-                    // Create menu
-                    let menu = gtk::gio::Menu::new();
+            // Subtitle lists always start with "None", so one entry means no tracks
+            let minimum_tracks = match kind {
+                TrackKind::Audio => 1,
+                TrackKind::Subtitle => 2,
+            };
+            if tracks.len() < minimum_tracks {
+                menu_button.set_sensitive(false);
+                menu_button.set_popover(None::<&gtk::Popover>);
+                return;
+            }
+            menu_button.set_sensitive(true);
 
-                    for (track_id, track_name) in &tracks {
-                        let item = gtk::gio::MenuItem::new(Some(track_name), None);
-                        let action_name = format!("player.subtitle-track-{}", track_id);
-                        item.set_action_and_target_value(Some(&action_name), None);
-                        menu.append_item(&item);
-                    }
-
-                    // Create popover from menu model
-                    let popover = gtk::PopoverMenu::from_model(Some(&menu));
-
-                    // Track popover state to prevent control hiding
-                    let popover_count_clone = popover_count.clone();
-                    popover.connect_show(move |_| {
-                        *popover_count_clone.borrow_mut() += 1;
-                        debug!(
-                            "Subtitle popover shown, count: {}",
-                            *popover_count_clone.borrow()
-                        );
-                    });
-                    popover.connect_hide(move |_| {
-                        let mut count = popover_count.borrow_mut();
-                        if *count > 0 {
-                            *count -= 1;
-                        }
-                        debug!("Subtitle popover hidden, count: {}", *count);
-                    });
-
-                    // Add actions for each track
-                    let action_group = gtk::gio::SimpleActionGroup::new();
-                    for (track_id, _) in &tracks {
-                        let action_name = format!("subtitle-track-{}", track_id);
-                        let action = gtk::gio::SimpleAction::new(&action_name, None);
-                        let sender_clone = sender.clone();
-                        let track_id_copy = *track_id;
-                        action.connect_activate(move |_, _| {
-                            sender_clone.input(PlayerInput::SetSubtitleTrack(track_id_copy));
-                        });
-                        action_group.add_action(&action);
-                    }
-
-                    // Insert the action group
-                    subtitle_menu_button.insert_action_group("player", Some(&action_group));
-                    subtitle_menu_button.set_popover(Some(&popover));
+            let menu = gtk::gio::Menu::new();
+            let action_group = gtk::gio::SimpleActionGroup::new();
+            for track in &tracks {
+                let action_name = format!("{}-track-{}", kind.action_prefix(), track.id);
+                let item = gtk::gio::MenuItem::new(Some(&track.name), None);
+                item.set_action_and_target_value(Some(&format!("player.{}", action_name)), None);
+                if track.id == current_track {
+                    item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
                 }
+                menu.append_item(&item);
+
+                let action = gtk::gio::SimpleAction::new(&action_name, None);
+                let sender_clone = sender.clone();
+                let track_id = track.id;
+                action.connect_activate(move |_, _| {
+                    sender_clone.input(match kind {
+                        TrackKind::Audio => PlayerInput::SetAudioTrack(track_id),
+                        TrackKind::Subtitle => PlayerInput::SetSubtitleTrack(track_id),
+                    });
+                });
+                action_group.add_action(&action);
+            }
+
+            let popover = gtk::PopoverMenu::from_model(Some(&menu));
+            Self::track_popover_visibility(popover.upcast_ref(), popover_count);
+
+            menu_button.insert_action_group("player", Some(&action_group));
+            menu_button.set_popover(Some(&popover));
+        });
+    }
+
+    /// Keep the controls visible while a popover is open
+    fn track_popover_visibility(
+        popover: &gtk::Popover,
+        popover_count: std::rc::Rc<std::cell::RefCell<usize>>,
+    ) {
+        let popover_count_clone = popover_count.clone();
+        popover.connect_show(move |_| {
+            *popover_count_clone.borrow_mut() += 1;
+            debug!("Popover shown, count: {}", *popover_count_clone.borrow());
+        });
+        popover.connect_hide(move |_| {
+            let mut count = popover_count.borrow_mut();
+            if *count > 0 {
+                *count -= 1;
+            }
+            debug!("Popover hidden, count: {}", *count);
+        });
+    }
+
+    /// The sync button with its popover of audio and subtitle delay controls
+    pub(super) fn build_sync_menu(
+        sender: &AsyncComponentSender<Self>,
+        popover_count: std::rc::Rc<std::cell::RefCell<usize>>,
+    ) -> (gtk::MenuButton, gtk::SpinButton, gtk::SpinButton) {
+        let delay_spin = |on_change: fn(i64) -> PlayerInput| {
+            let limit = Self::MAX_DELAY_MS as f64;
+            let spin = gtk::SpinButton::with_range(-limit, limit, 50.0);
+            spin.set_digits(0);
+            spin.set_value(0.0);
+            let sender = sender.clone();
+            spin.connect_value_changed(move |spin| {
+                sender.input(on_change(spin.value() as i64));
             });
+            spin
+        };
+        let audio_delay_spin = delay_spin(PlayerInput::SetAudioDelay);
+        let subtitle_delay_spin = delay_spin(PlayerInput::SetSubtitleDelay);
+
+        let grid = gtk::Grid::builder()
+            .row_spacing(6)
+            .column_spacing(12)
+            .margin_top(6)
+            .margin_bottom(6)
+            .margin_start(6)
+            .margin_end(6)
+            .build();
+        let rows = [
+            ("Audio delay (ms)", &audio_delay_spin),
+            ("Subtitle delay (ms)", &subtitle_delay_spin),
+        ];
+        for (row, (label, spin)) in rows.into_iter().enumerate() {
+            let label = gtk::Label::builder().label(label).xalign(0.0).build();
+            grid.attach(&label, 0, row as i32, 1, 1);
+            grid.attach(spin, 1, row as i32, 1, 1);
         }
+        let reset_button = gtk::Button::with_label("Reset");
+        let reset_sender = sender.clone();
+        reset_button.connect_clicked(move |_| reset_sender.input(PlayerInput::ResetDelays));
+        grid.attach(&reset_button, 0, 2, 2, 1);
+
+        let popover = gtk::Popover::new();
+        popover.set_child(Some(&grid));
+        Self::track_popover_visibility(&popover, popover_count);
+
+        let sync_menu_button = gtk::MenuButton::new();
+        sync_menu_button.set_popover(Some(&popover));
+        (sync_menu_button, audio_delay_spin, subtitle_delay_spin)
     }
 
     pub(super) fn populate_zoom_menu(&self, sender: AsyncComponentSender<Self>) {

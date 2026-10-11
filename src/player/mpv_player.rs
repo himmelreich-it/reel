@@ -46,7 +46,8 @@ pub enum PlayerState {
     Error,
 }
 
-use super::types::{UpscalingMode, ZoomMode};
+use super::language;
+use super::types::{SubtitleStyle, TrackInfo, UpscalingMode, ZoomMode};
 
 #[cfg(test)]
 mod tests {
@@ -81,7 +82,7 @@ mod tests {
             1,
             "Should have 'None' option even when no media is loaded"
         );
-        assert_eq!(subtitle_tracks[0], (-1, "None".to_string()));
+        assert_eq!(subtitle_tracks[0], TrackInfo::subtitles_off());
     }
 
     #[tokio::test]
@@ -153,6 +154,9 @@ struct MpvPlayerInner {
     last_seek_target: Arc<Mutex<Option<f64>>>,
     upscaling_mode: Arc<Mutex<UpscalingMode>>,
     zoom_mode: Arc<Mutex<ZoomMode>>,
+    /// mpv `alang` and `slang` lists derived from the configured languages
+    track_languages: Arc<Mutex<(String, String)>>,
+    subtitle_style: Arc<Mutex<SubtitleStyle>>,
     error_callback: Arc<Mutex<Option<Box<dyn Fn(String) + Send + 'static>>>>,
     event_monitor_handle: Arc<Mutex<Option<glib::SourceId>>>,
     gl_area_realized: Arc<std::sync::atomic::AtomicBool>,
@@ -278,6 +282,11 @@ impl MpvPlayer {
                 last_seek_target: Arc::new(Mutex::new(None)),
                 upscaling_mode: Arc::new(Mutex::new(UpscalingMode::None)),
                 zoom_mode: Arc::new(Mutex::new(ZoomMode::default())),
+                track_languages: Arc::new(Mutex::new((
+                    language::mpv_language_list(&config.playback.preferred_audio_language),
+                    language::mpv_language_list(&config.playback.preferred_subtitle_language),
+                ))),
+                subtitle_style: Arc::new(Mutex::new(config.playback.subtitle_style())),
                 error_callback: Arc::new(Mutex::new(None)),
                 event_monitor_handle: Arc::new(Mutex::new(None)),
                 gl_area_realized: Arc::new(AtomicBool::new(false)),
@@ -1100,92 +1109,58 @@ impl MpvPlayer {
         self.inner.state.read().await.clone()
     }
 
-    pub async fn get_audio_tracks(&self) -> Vec<(i32, String)> {
+    /// Collect the tracks of one mpv track type (`"audio"` or `"sub"`).
+    fn tracks_of_type(&self, wanted: &str, fallback_label: &str) -> Vec<TrackInfo> {
         let mut tracks = Vec::new();
 
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
             && let Ok(count) = mpv.get_property::<i64>("track-list/count")
         {
-            debug!("mpv: track-list/count={}", count);
             for i in 0..count {
-                let type_key = format!("track-list/{}/type", i);
-                match mpv.get_property::<String>(&type_key) {
-                    Ok(track_type) => {
-                        debug!("mpv: track {} type={} (expect audio)", i, track_type);
-                        if track_type != "audio" {
-                            continue;
-                        }
-                    }
-                    Err(e) => {
-                        debug!("mpv: failed to get {}: {:?}", type_key, e);
-                        continue;
-                    }
+                match mpv.get_property::<String>(&format!("track-list/{}/type", i)) {
+                    Ok(track_type) if track_type == wanted => {}
+                    _ => continue,
                 }
-                let id_key = format!("track-list/{}/id", i);
-                let title_key = format!("track-list/{}/title", i);
-                let lang_key = format!("track-list/{}/lang", i);
 
-                if let Ok(id) = mpv.get_property::<i64>(&id_key) {
-                    let mut title = format!("Audio Track {}", id);
+                let Ok(id) = mpv.get_property::<i64>(&format!("track-list/{}/id", i)) else {
+                    continue;
+                };
+                let title = mpv
+                    .get_property::<String>(&format!("track-list/{}/title", i))
+                    .ok();
+                let language = mpv
+                    .get_property::<String>(&format!("track-list/{}/lang", i))
+                    .ok();
 
-                    if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
-                        title = track_title;
-                    } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
-                        title = format!("Audio Track {} ({})", id, lang);
-                    }
+                let name = match (&title, &language) {
+                    (Some(title), _) => title.clone(),
+                    (None, Some(lang)) => format!("{} {} ({})", fallback_label, id, lang),
+                    (None, None) => format!("{} {}", fallback_label, id),
+                };
 
-                    debug!("mpv: audio id={} title={}", id, title);
-                    tracks.push((id as i32, title));
-                }
+                debug!(
+                    "mpv: {} id={} name={} lang={:?}",
+                    wanted, id, name, language
+                );
+                tracks.push(TrackInfo {
+                    id: id as i32,
+                    name,
+                    language,
+                    title,
+                });
             }
         }
 
         tracks
     }
 
-    pub async fn get_subtitle_tracks(&self) -> Vec<(i32, String)> {
-        let mut tracks = Vec::new();
+    pub async fn get_audio_tracks(&self) -> Vec<TrackInfo> {
+        self.tracks_of_type("audio", "Audio Track")
+    }
 
-        // Add "None" option
-        tracks.push((-1, "None".to_string()));
-
-        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap()
-            && let Ok(count) = mpv.get_property::<i64>("track-list/count")
-        {
-            debug!("mpv: track-list/count={}", count);
-            for i in 0..count {
-                let type_key = format!("track-list/{}/type", i);
-                match mpv.get_property::<String>(&type_key) {
-                    Ok(track_type) => {
-                        debug!("mpv: track {} type={} (expect sub)", i, track_type);
-                        if track_type != "sub" {
-                            continue;
-                        }
-                    }
-                    Err(e) => {
-                        debug!("mpv: failed to get {}: {:?}", type_key, e);
-                        continue;
-                    }
-                }
-                let id_key = format!("track-list/{}/id", i);
-                let title_key = format!("track-list/{}/title", i);
-                let lang_key = format!("track-list/{}/lang", i);
-
-                if let Ok(id) = mpv.get_property::<i64>(&id_key) {
-                    let mut title = format!("Subtitle {}", id);
-
-                    if let Ok(track_title) = mpv.get_property::<String>(&title_key) {
-                        title = track_title;
-                    } else if let Ok(lang) = mpv.get_property::<String>(&lang_key) {
-                        title = format!("Subtitle {} ({})", id, lang);
-                    }
-
-                    debug!("mpv: subtitle id={} title={}", id, title);
-                    tracks.push((id as i32, title));
-                }
-            }
-        }
-
+    pub async fn get_subtitle_tracks(&self) -> Vec<TrackInfo> {
+        let mut tracks = vec![TrackInfo::subtitles_off()];
+        tracks.extend(self.tracks_of_type("sub", "Subtitle"));
         tracks
     }
 
@@ -1231,6 +1206,43 @@ impl MpvPlayer {
             return sid as i32;
         }
         -1
+    }
+
+    /// Set the preferred audio and subtitle languages (ISO 639-1 codes, empty for none).
+    pub async fn set_track_languages(&self, audio: &str, subtitle: &str) -> Result<()> {
+        let alang = language::mpv_language_list(audio);
+        let slang = language::mpv_language_list(subtitle);
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
+            apply_track_languages(mpv, &alang, &slang)?;
+        }
+        *self.inner.track_languages.lock().unwrap() = (alang, slang);
+        Ok(())
+    }
+
+    pub async fn set_subtitle_style(&self, style: SubtitleStyle) -> Result<()> {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
+            apply_subtitle_style(mpv, &style)?;
+        }
+        *self.inner.subtitle_style.lock().unwrap() = style;
+        Ok(())
+    }
+
+    /// Delay audio relative to video, in seconds (negative plays audio earlier).
+    pub async fn set_audio_delay(&self, seconds: f64) -> Result<()> {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
+            mpv.set_property("audio-delay", seconds)
+                .map_err(|e| anyhow::anyhow!("Failed to set audio-delay: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    /// Delay subtitles relative to video, in seconds (negative shows them earlier).
+    pub async fn set_subtitle_delay(&self, seconds: f64) -> Result<()> {
+        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
+            mpv.set_property("sub-delay", seconds)
+                .map_err(|e| anyhow::anyhow!("Failed to set sub-delay: {:?}", e))?;
+        }
+        Ok(())
     }
 
     pub async fn set_upscaling_mode(&self, mode: UpscalingMode) -> Result<()> {
@@ -1563,10 +1575,12 @@ impl MpvPlayerInner {
             .map_err(|e| anyhow::anyhow!("Failed to set aid: {:?}", e))?;
         mpv.set_property("sid", "auto")
             .map_err(|e| anyhow::anyhow!("Failed to set sid: {:?}", e))?;
-        mpv.set_property("alang", "eng,en")
-            .map_err(|e| anyhow::anyhow!("Failed to set alang: {:?}", e))?;
-        mpv.set_property("slang", "eng,en")
-            .map_err(|e| anyhow::anyhow!("Failed to set slang: {:?}", e))?;
+        let (alang, slang) = self.track_languages.lock().unwrap().clone();
+        apply_track_languages(&mpv, &alang, &slang)?;
+        // Styling must never stop playback, e.g. on an mpv without sub-border-style
+        if let Err(e) = apply_subtitle_style(&mpv, &self.subtitle_style.lock().unwrap()) {
+            warn!("Failed to apply subtitle style: {}", e);
+        }
         mpv.set_property("sub-auto", "fuzzy")
             .map_err(|e| anyhow::anyhow!("Failed to set sub-auto: {:?}", e))?;
         mpv.set_property("audio-file-auto", "fuzzy")
@@ -1581,6 +1595,34 @@ impl MpvPlayerInner {
         info!("MPV instance configured");
         Ok(mpv)
     }
+}
+
+fn apply_track_languages(mpv: &Mpv, alang: &str, slang: &str) -> Result<()> {
+    mpv.set_property("alang", alang)
+        .map_err(|e| anyhow::anyhow!("Failed to set alang: {:?}", e))?;
+    mpv.set_property("slang", slang)
+        .map_err(|e| anyhow::anyhow!("Failed to set slang: {:?}", e))?;
+    Ok(())
+}
+
+fn apply_subtitle_style(mpv: &Mpv, style: &SubtitleStyle) -> Result<()> {
+    mpv.set_property("sub-font-size", style.font_size as i64)
+        .map_err(|e| anyhow::anyhow!("Failed to set sub-font-size: {:?}", e))?;
+    mpv.set_property("sub-color", style.color.as_str())
+        .map_err(|e| anyhow::anyhow!("Failed to set sub-color: {:?}", e))?;
+    mpv.set_property("sub-border-size", style.border_size)
+        .map_err(|e| anyhow::anyhow!("Failed to set sub-border-size: {:?}", e))?;
+    let border_style = if style.background {
+        "background-box"
+    } else {
+        "outline-and-shadow"
+    };
+    mpv.set_property("sub-border-style", border_style)
+        .map_err(|e| anyhow::anyhow!("Failed to set sub-border-style: {:?}", e))?;
+    // mpv colours with alpha are #AARRGGBB
+    mpv.set_property("sub-back-color", "#A0000000")
+        .map_err(|e| anyhow::anyhow!("Failed to set sub-back-color: {:?}", e))?;
+    Ok(())
 }
 
 impl Drop for MpvPlayerInner {
