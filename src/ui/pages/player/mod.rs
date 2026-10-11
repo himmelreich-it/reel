@@ -567,17 +567,20 @@ impl AsyncComponent for PlayerPage {
                 #[watch]
                 set_reveal_child: model.controls_visible() && !model.error_retry_manager.has_error(),
 
+                // Dragging the scrim moves the window; clicks reach the buttons
                 #[name = "top_scrim"]
-                gtk::Box {
-                    add_css_class: "player-scrim-top",
+                gtk::WindowHandle {
+                    gtk::Box {
+                        add_css_class: "player-scrim-top",
 
-                    gtk::Button {
-                        set_icon_name: "go-previous-symbolic",
-                        set_tooltip_text: Some("Back"),
-                        add_css_class: "player-button",
-                        add_css_class: "raised",
-                        connect_clicked[sender] => move |_| {
-                            sender.input(PlayerInput::NavigateBack);
+                        gtk::Button {
+                            set_icon_name: "go-previous-symbolic",
+                            set_tooltip_text: Some("Back"),
+                            add_css_class: "player-button",
+                            add_css_class: "raised",
+                            connect_clicked[sender] => move |_| {
+                                sender.input(PlayerInput::NavigateBack);
+                            },
                         },
                     },
                 },
@@ -592,190 +595,192 @@ impl AsyncComponent for PlayerPage {
                 set_reveal_child: model.controls_visible() && !model.error_retry_manager.has_error(),
 
                 #[name = "bottom_scrim"]
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Vertical,
-                    set_spacing: 16,
-                    add_css_class: "player-scrim-bottom",
-
-                    // Show name above "S2 E4 · Episode title", or the movie title
+                gtk::WindowHandle {
                     gtk::Box {
                         set_orientation: gtk::Orientation::Vertical,
-                        set_spacing: 4,
-
-                        model.title_eyebrow_label.clone() {
-                            set_xalign: 0.0,
-                            set_ellipsize: gtk::pango::EllipsizeMode::End,
-                            add_css_class: "player-title-eyebrow",
-                        },
-
-                        model.title_label.clone() {
-                            set_xalign: 0.0,
-                            set_ellipsize: gtk::pango::EllipsizeMode::End,
-                            add_css_class: "player-title",
-                        },
-                    },
-
-                    // Elapsed time, seek bar, remaining time
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
                         set_spacing: 16,
+                        add_css_class: "player-scrim-bottom",
 
-                        model.seek_bar_manager.get_position_label().clone() {
-                            set_width_request: 56,
-                            set_xalign: 0.0,
-                            add_css_class: "player-time",
-                        },
-
-                        model.seek_bar_manager.get_seek_widget().clone() {
-                            set_hexpand: true,
-                            set_valign: gtk::Align::Center,
-                        },
-
-                        model.seek_bar_manager.get_remaining_label().clone() {
-                            set_width_request: 56,
-                            set_xalign: 1.0,
-                            add_css_class: "player-time",
-                        },
-                    },
-
-                    gtk::CenterBox {
-                        // Mute and volume
-                        #[wrap(Some)]
-                        set_start_widget = &gtk::Box {
-                            set_orientation: gtk::Orientation::Horizontal,
-                            set_spacing: 8,
-
-                            gtk::Button {
-                                #[watch]
-                                set_icon_name: if model.volume_manager.is_muted() {
-                                    "audio-volume-muted-symbolic"
-                                } else {
-                                    "audio-volume-high-symbolic"
-                                },
-                                #[watch]
-                                set_tooltip_text: Some(if model.volume_manager.is_muted() {
-                                    "Unmute"
-                                } else {
-                                    "Mute"
-                                }),
-                                add_css_class: "player-button",
-                                connect_clicked => PlayerInput::ToggleMute,
-                            },
-
-                            model.volume_manager.get_volume_slider().clone() {
-                                set_width_request: 96,
-                                set_valign: gtk::Align::Center,
-                                set_draw_value: false,
-                                add_css_class: "player-volume-slider",
-                            },
-                        },
-
-                        // Playback controls
-                        #[wrap(Some)]
-                        set_center_widget = &gtk::Box {
-                            set_orientation: gtk::Orientation::Horizontal,
-                            set_spacing: 12,
-                            set_valign: gtk::Align::Center,
-
-                            gtk::Button {
-                                set_icon_name: "media-skip-backward-symbolic",
-                                set_tooltip_text: Some("Previous"),
-                                add_css_class: "player-button",
-                                #[watch]
-                                set_sensitive: model.can_go_previous,
-                                connect_clicked => PlayerInput::Previous,
-                            },
-
-                            gtk::Button {
-                                set_icon_name: "media-seek-backward-symbolic",
-                                set_tooltip_text: Some("Back 10 seconds"),
-                                add_css_class: "player-button",
-                                connect_clicked => PlayerInput::Rewind,
-                            },
-
-                            gtk::Button {
-                                #[watch]
-                                set_icon_name: if matches!(model.player_state, PlayerState::Playing) {
-                                    "media-playback-pause-symbolic"
-                                } else {
-                                    "media-playback-start-symbolic"
-                                },
-                                #[watch]
-                                set_tooltip_text: Some(if matches!(model.player_state, PlayerState::Playing) {
-                                    "Pause"
-                                } else {
-                                    "Play"
-                                }),
-                                set_valign: gtk::Align::Center,
-                                add_css_class: "player-play-button",
-                                connect_clicked => PlayerInput::PlayPause,
-                            },
-
-                            gtk::Button {
-                                set_icon_name: "media-seek-forward-symbolic",
-                                set_tooltip_text: Some("Forward 10 seconds"),
-                                add_css_class: "player-button",
-                                connect_clicked => PlayerInput::Forward,
-                            },
-
-                            gtk::Button {
-                                set_icon_name: "media-skip-forward-symbolic",
-                                set_tooltip_text: Some("Next"),
-                                add_css_class: "player-button",
-                                #[watch]
-                                set_sensitive: model.can_go_next,
-                                connect_clicked => PlayerInput::Next,
-                            },
-                        },
-
-                        // Tracks, sync, zoom and fullscreen
-                        #[wrap(Some)]
-                        set_end_widget = &gtk::Box {
-                            set_orientation: gtk::Orientation::Horizontal,
+                        // Show name above "S2 E4 · Episode title", or the movie title
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Vertical,
                             set_spacing: 4,
 
-                            model.audio_menu_button.clone() {
-                                set_icon_name: "audio-x-generic-symbolic",
-                                set_tooltip_text: Some("Audio Track"),
-                                add_css_class: "player-button",
+                            model.title_eyebrow_label.clone() {
+                                set_xalign: 0.0,
+                                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                add_css_class: "player-title-eyebrow",
                             },
 
-                            model.subtitle_menu_button.clone() {
-                                set_icon_name: "media-view-subtitles-symbolic",
-                                set_tooltip_text: Some("Subtitles"),
-                                add_css_class: "player-button",
+                            model.title_label.clone() {
+                                set_xalign: 0.0,
+                                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                add_css_class: "player-title",
+                            },
+                        },
+
+                        // Elapsed time, seek bar, remaining time
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_spacing: 16,
+
+                            model.seek_bar_manager.get_position_label().clone() {
+                                set_width_request: 56,
+                                set_xalign: 0.0,
+                                add_css_class: "player-time",
                             },
 
-                            // Quality/Resolution button (hidden - doesn't work with current MPV embed)
-                            model.quality_menu_button.clone() {
-                                set_icon_name: "preferences-system-symbolic",
-                                set_tooltip_text: Some("Video Quality"),
-                                add_css_class: "player-button",
-                                set_visible: false,
+                            model.seek_bar_manager.get_seek_widget().clone() {
+                                set_hexpand: true,
+                                set_valign: gtk::Align::Center,
                             },
 
-                            model.sync_menu_button.clone() {
-                                set_icon_name: "preferences-system-time-symbolic",
-                                set_tooltip_text: Some("Audio and Subtitle Sync"),
-                                add_css_class: "player-button",
+                            model.seek_bar_manager.get_remaining_label().clone() {
+                                set_width_request: 56,
+                                set_xalign: 1.0,
+                                add_css_class: "player-time",
                             },
+                        },
 
-                            model.zoom_menu_button.clone() {
-                                set_icon_name: "zoom-in-symbolic",
-                                set_tooltip_text: Some("Video Zoom"),
-                                add_css_class: "player-button",
-                            },
+                        gtk::CenterBox {
+                            // Mute and volume
+                            #[wrap(Some)]
+                            set_start_widget = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 8,
 
-                            gtk::Button {
-                                #[watch]
-                                set_icon_name: if model.is_fullscreen {
-                                    "view-restore-symbolic"
-                                } else {
-                                    "view-fullscreen-symbolic"
+                                gtk::Button {
+                                    #[watch]
+                                    set_icon_name: if model.volume_manager.is_muted() {
+                                        "audio-volume-muted-symbolic"
+                                    } else {
+                                        "audio-volume-high-symbolic"
+                                    },
+                                    #[watch]
+                                    set_tooltip_text: Some(if model.volume_manager.is_muted() {
+                                        "Unmute"
+                                    } else {
+                                        "Mute"
+                                    }),
+                                    add_css_class: "player-button",
+                                    connect_clicked => PlayerInput::ToggleMute,
                                 },
-                                set_tooltip_text: Some("Fullscreen"),
-                                add_css_class: "player-button",
-                                connect_clicked => PlayerInput::ToggleFullscreen,
+
+                                model.volume_manager.get_volume_slider().clone() {
+                                    set_width_request: 96,
+                                    set_valign: gtk::Align::Center,
+                                    set_draw_value: false,
+                                    add_css_class: "player-volume-slider",
+                                },
+                            },
+
+                            // Playback controls
+                            #[wrap(Some)]
+                            set_center_widget = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 12,
+                                set_valign: gtk::Align::Center,
+
+                                gtk::Button {
+                                    set_icon_name: "media-skip-backward-symbolic",
+                                    set_tooltip_text: Some("Previous"),
+                                    add_css_class: "player-button",
+                                    #[watch]
+                                    set_sensitive: model.can_go_previous,
+                                    connect_clicked => PlayerInput::Previous,
+                                },
+
+                                gtk::Button {
+                                    set_icon_name: "media-seek-backward-symbolic",
+                                    set_tooltip_text: Some("Back 10 seconds"),
+                                    add_css_class: "player-button",
+                                    connect_clicked => PlayerInput::Rewind,
+                                },
+
+                                gtk::Button {
+                                    #[watch]
+                                    set_icon_name: if matches!(model.player_state, PlayerState::Playing) {
+                                        "media-playback-pause-symbolic"
+                                    } else {
+                                        "media-playback-start-symbolic"
+                                    },
+                                    #[watch]
+                                    set_tooltip_text: Some(if matches!(model.player_state, PlayerState::Playing) {
+                                        "Pause"
+                                    } else {
+                                        "Play"
+                                    }),
+                                    set_valign: gtk::Align::Center,
+                                    add_css_class: "player-play-button",
+                                    connect_clicked => PlayerInput::PlayPause,
+                                },
+
+                                gtk::Button {
+                                    set_icon_name: "media-seek-forward-symbolic",
+                                    set_tooltip_text: Some("Forward 10 seconds"),
+                                    add_css_class: "player-button",
+                                    connect_clicked => PlayerInput::Forward,
+                                },
+
+                                gtk::Button {
+                                    set_icon_name: "media-skip-forward-symbolic",
+                                    set_tooltip_text: Some("Next"),
+                                    add_css_class: "player-button",
+                                    #[watch]
+                                    set_sensitive: model.can_go_next,
+                                    connect_clicked => PlayerInput::Next,
+                                },
+                            },
+
+                            // Tracks, sync, zoom and fullscreen
+                            #[wrap(Some)]
+                            set_end_widget = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 4,
+
+                                model.audio_menu_button.clone() {
+                                    set_icon_name: "audio-x-generic-symbolic",
+                                    set_tooltip_text: Some("Audio Track"),
+                                    add_css_class: "player-button",
+                                },
+
+                                model.subtitle_menu_button.clone() {
+                                    set_icon_name: "media-view-subtitles-symbolic",
+                                    set_tooltip_text: Some("Subtitles"),
+                                    add_css_class: "player-button",
+                                },
+
+                                // Quality/Resolution button (hidden - doesn't work with current MPV embed)
+                                model.quality_menu_button.clone() {
+                                    set_icon_name: "preferences-system-symbolic",
+                                    set_tooltip_text: Some("Video Quality"),
+                                    add_css_class: "player-button",
+                                    set_visible: false,
+                                },
+
+                                model.sync_menu_button.clone() {
+                                    set_icon_name: "preferences-system-time-symbolic",
+                                    set_tooltip_text: Some("Audio and Subtitle Sync"),
+                                    add_css_class: "player-button",
+                                },
+
+                                model.zoom_menu_button.clone() {
+                                    set_icon_name: "zoom-in-symbolic",
+                                    set_tooltip_text: Some("Video Zoom"),
+                                    add_css_class: "player-button",
+                                },
+
+                                gtk::Button {
+                                    #[watch]
+                                    set_icon_name: if model.is_fullscreen {
+                                        "view-restore-symbolic"
+                                    } else {
+                                        "view-fullscreen-symbolic"
+                                    },
+                                    set_tooltip_text: Some("Fullscreen"),
+                                    add_css_class: "player-button",
+                                    connect_clicked => PlayerInput::ToggleFullscreen,
+                                },
                             },
                         },
                     },
@@ -1179,10 +1184,8 @@ impl AsyncComponent for PlayerPage {
 
         let widgets = view_output!();
 
-        // The scrims cover part of the video: dragging them moves the window
-        // too, and the pointer over them keeps the controls up
+        // The pointer over the scrims keeps the controls up
         for scrim in [widgets.top_scrim.clone(), widgets.bottom_scrim.clone()] {
-            scrim.add_controller(Self::window_drag_gesture(&window));
             let motion = gtk::EventControllerMotion::new();
             let enter_sender = sender.clone();
             motion.connect_enter(move |_, _, _| {
