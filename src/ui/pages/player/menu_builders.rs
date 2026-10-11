@@ -70,28 +70,36 @@ impl PlayerPage {
             }
             menu_button.set_sensitive(true);
 
+            // One stateful action makes the items radio buttons marking the playing track
+            let action_name = format!("{}-track", kind.action_prefix());
             let menu = gtk::gio::Menu::new();
-            let action_group = gtk::gio::SimpleActionGroup::new();
             for track in &tracks {
-                let action_name = format!("{}-track-{}", kind.action_prefix(), track.id);
                 let item = gtk::gio::MenuItem::new(Some(&track.name), None);
-                item.set_action_and_target_value(Some(&format!("player.{}", action_name)), None);
-                if track.id == current_track {
-                    item.set_attribute_value("icon", Some(&"object-select-symbolic".to_variant()));
-                }
+                item.set_action_and_target_value(
+                    Some(&format!("player.{}", action_name)),
+                    Some(&track.id.to_variant()),
+                );
                 menu.append_item(&item);
-
-                let action = gtk::gio::SimpleAction::new(&action_name, None);
-                let sender_clone = sender.clone();
-                let track_id = track.id;
-                action.connect_activate(move |_, _| {
-                    sender_clone.input(match kind {
-                        TrackKind::Audio => PlayerInput::SetAudioTrack(track_id),
-                        TrackKind::Subtitle => PlayerInput::SetSubtitleTrack(track_id),
-                    });
-                });
-                action_group.add_action(&action);
             }
+
+            let action = gtk::gio::SimpleAction::new_stateful(
+                &action_name,
+                Some(glib::VariantTy::INT32),
+                &current_track.to_variant(),
+            );
+            let sender_clone = sender.clone();
+            action.connect_activate(move |action, parameter| {
+                let Some(track_id) = parameter.and_then(|p| p.get::<i32>()) else {
+                    return;
+                };
+                action.set_state(&track_id.to_variant());
+                sender_clone.input(match kind {
+                    TrackKind::Audio => PlayerInput::SetAudioTrack(track_id),
+                    TrackKind::Subtitle => PlayerInput::SetSubtitleTrack(track_id),
+                });
+            });
+            let action_group = gtk::gio::SimpleActionGroup::new();
+            action_group.add_action(&action);
 
             let popover = gtk::PopoverMenu::from_model(Some(&menu));
             Self::track_popover_visibility(popover.upcast_ref(), popover_count);
@@ -124,23 +132,7 @@ impl PlayerPage {
     pub(super) fn build_sync_menu(
         sender: &AsyncComponentSender<Self>,
         popover_count: std::rc::Rc<std::cell::RefCell<usize>>,
-    ) -> (gtk::MenuButton, gtk::SpinButton, gtk::SpinButton) {
-        let delay_spin = |on_change: fn(i64) -> PlayerInput| {
-            let limit = Self::MAX_DELAY_MS as f64;
-            let spin = gtk::SpinButton::with_range(-limit, limit, 50.0);
-            spin.set_digits(0);
-            // Adjusted with the +/- buttons, arrow keys or scrolling, not by typing
-            spin.set_editable(false);
-            spin.set_value(0.0);
-            let sender = sender.clone();
-            spin.connect_value_changed(move |spin| {
-                sender.input(on_change(spin.value() as i64));
-            });
-            spin
-        };
-        let audio_delay_spin = delay_spin(PlayerInput::SetAudioDelay);
-        let subtitle_delay_spin = delay_spin(PlayerInput::SetSubtitleDelay);
-
+    ) -> (gtk::MenuButton, gtk::Label, gtk::Label) {
         let grid = gtk::Grid::builder()
             .row_spacing(6)
             .column_spacing(12)
@@ -149,19 +141,35 @@ impl PlayerPage {
             .margin_start(6)
             .margin_end(6)
             .build();
-        let rows = [
-            ("Audio delay (ms)", &audio_delay_spin),
-            ("Subtitle delay (ms)", &subtitle_delay_spin),
-        ];
-        for (row, (label, spin)) in rows.into_iter().enumerate() {
-            let label = gtk::Label::builder().label(label).xalign(0.0).build();
-            grid.attach(&label, 0, row as i32, 1, 1);
-            grid.attach(spin, 1, row as i32, 1, 1);
-        }
+
+        // Each row: name, −, current value, +
+        let delay_row = |row: i32, title: &str, on_step: fn(i64) -> PlayerInput| {
+            let title = gtk::Label::builder().label(title).xalign(0.0).build();
+            let value = gtk::Label::builder()
+                .label(Self::format_delay(0))
+                .width_chars(9)
+                .build();
+            let step_button = |icon: &str, step_ms: i64| {
+                let button = gtk::Button::from_icon_name(icon);
+                button.add_css_class("circular");
+                button.add_css_class("flat");
+                let sender = sender.clone();
+                button.connect_clicked(move |_| sender.input(on_step(step_ms)));
+                button
+            };
+            grid.attach(&title, 0, row, 1, 1);
+            grid.attach(&step_button("list-remove-symbolic", -50), 1, row, 1, 1);
+            grid.attach(&value, 2, row, 1, 1);
+            grid.attach(&step_button("list-add-symbolic", 50), 3, row, 1, 1);
+            value
+        };
+        let audio_delay_label = delay_row(0, "Audio delay", PlayerInput::AdjustAudioDelay);
+        let subtitle_delay_label = delay_row(1, "Subtitle delay", PlayerInput::AdjustSubtitleDelay);
+
         let reset_button = gtk::Button::with_label("Reset");
         let reset_sender = sender.clone();
         reset_button.connect_clicked(move |_| reset_sender.input(PlayerInput::ResetDelays));
-        grid.attach(&reset_button, 0, 2, 2, 1);
+        grid.attach(&reset_button, 0, 2, 4, 1);
 
         let popover = gtk::Popover::new();
         popover.set_child(Some(&grid));
@@ -184,7 +192,7 @@ impl PlayerPage {
 
         let sync_menu_button = gtk::MenuButton::new();
         sync_menu_button.set_popover(Some(&popover));
-        (sync_menu_button, audio_delay_spin, subtitle_delay_spin)
+        (sync_menu_button, audio_delay_label, subtitle_delay_label)
     }
 
     pub(super) fn populate_zoom_menu(&self, sender: AsyncComponentSender<Self>) {

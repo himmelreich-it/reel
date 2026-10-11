@@ -32,6 +32,14 @@ pub enum DelayKind {
 impl PlayerPage {
     pub(super) const MAX_DELAY_MS: i64 = 10_000;
 
+    pub(super) fn format_delay(delay_ms: i64) -> String {
+        if delay_ms == 0 {
+            "0 ms".to_string()
+        } else {
+            format!("{:+} ms", delay_ms)
+        }
+    }
+
     pub(super) fn clamp_delay(delay_ms: i64) -> i64 {
         delay_ms.clamp(-Self::MAX_DELAY_MS, Self::MAX_DELAY_MS)
     }
@@ -51,7 +59,6 @@ impl PlayerPage {
             DelayKind::Audio => self.audio_delay_ms,
             DelayKind::Subtitle => self.subtitle_delay_ms,
         };
-        // The spin buttons echo programmatic changes back; ignore those
         let Some(player) = self.player.clone() else {
             return;
         };
@@ -62,11 +69,13 @@ impl PlayerPage {
         match kind {
             DelayKind::Audio => {
                 self.audio_delay_ms = delay_ms;
-                self.audio_delay_spin.set_value(delay_ms as f64);
+                self.audio_delay_label
+                    .set_label(&Self::format_delay(delay_ms));
             }
             DelayKind::Subtitle => {
                 self.subtitle_delay_ms = delay_ms;
-                self.subtitle_delay_spin.set_value(delay_ms as f64);
+                self.subtitle_delay_label
+                    .set_label(&Self::format_delay(delay_ms));
             }
         }
 

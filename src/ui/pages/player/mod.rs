@@ -91,8 +91,8 @@ pub struct PlayerPage {
     subtitle_menu_button: gtk::MenuButton,
     // Audio/subtitle sync, in milliseconds (positive delays them)
     sync_menu_button: gtk::MenuButton,
-    audio_delay_spin: gtk::SpinButton,
-    subtitle_delay_spin: gtk::SpinButton,
+    audio_delay_label: gtk::Label,
+    subtitle_delay_label: gtk::Label,
     audio_delay_ms: i64,
     subtitle_delay_ms: i64,
     // Bumped on every delay change; only the latest scheduled save runs
@@ -723,7 +723,7 @@ impl AsyncComponent for PlayerPage {
         let quality_menu_button = gtk::MenuButton::new();
         let zoom_menu_button = gtk::MenuButton::new();
         let active_popover_count = std::rc::Rc::new(std::cell::RefCell::new(0));
-        let (sync_menu_button, audio_delay_spin, subtitle_delay_spin) =
+        let (sync_menu_button, audio_delay_label, subtitle_delay_label) =
             Self::build_sync_menu(&sender, active_popover_count.clone());
         let zoom_label = gtk::Label::new(Some("Fit"));
 
@@ -763,8 +763,8 @@ impl AsyncComponent for PlayerPage {
             audio_menu_button: audio_menu_button.clone(),
             subtitle_menu_button: subtitle_menu_button.clone(),
             sync_menu_button,
-            audio_delay_spin,
-            subtitle_delay_spin,
+            audio_delay_label,
+            subtitle_delay_label,
             audio_delay_ms: 0,
             subtitle_delay_ms: 0,
             delay_save_generation: 0,
@@ -2013,10 +2013,10 @@ impl AsyncComponent for PlayerPage {
             PlayerInput::TrackPreferencesApplied(applied) => {
                 self.audio_delay_ms = applied.audio_delay_ms;
                 self.subtitle_delay_ms = applied.subtitle_delay_ms;
-                self.audio_delay_spin
-                    .set_value(applied.audio_delay_ms as f64);
-                self.subtitle_delay_spin
-                    .set_value(applied.subtitle_delay_ms as f64);
+                self.audio_delay_label
+                    .set_label(&Self::format_delay(applied.audio_delay_ms));
+                self.subtitle_delay_label
+                    .set_label(&Self::format_delay(applied.subtitle_delay_ms));
                 sender.input(PlayerInput::UpdateTrackMenus);
             }
             PlayerInput::SetAudioDelay(delay_ms) => {
