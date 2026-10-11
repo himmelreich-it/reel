@@ -238,7 +238,7 @@ let
 
     install -m 755 target/release/reel %{buildroot}%{_bindir}/reel
     install -m 644 data/dev.arsfeld.Reel.desktop %{buildroot}%{_datadir}/applications/
-    install -m 644 data/icons/dev.arsfeld.Reel.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/
+    install -m 644 data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg %{buildroot}%{_datadir}/icons/hicolor/scalable/apps/
 
     %files
     %{_bindir}/reel
@@ -256,7 +256,7 @@ let
 
     # Copy the built RPM to target directory
     mkdir -p target/rpm
-    cp "$RPM_DIR/RPMS/x86_64/$PKG_NAME-$VERSION-1"*.rpm target/rpm/ 2>/dev/null || true
+    cp "$RPM_DIR/RPMS/$(uname -m)/$PKG_NAME-$VERSION-1"*.rpm target/rpm/
 
     echo ""
     echo "✓ RPM package built successfully!"
@@ -269,10 +269,12 @@ let
     echo "Building AppImage..."
     echo "=============================="
 
+    ARCH=$(uname -m)
+
     # Check for AppImage tools
     if ! command -v appimagetool &> /dev/null; then
       echo "Downloading appimagetool..."
-      wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -O /tmp/appimagetool
+      wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-$ARCH.AppImage" -O /tmp/appimagetool
       chmod +x /tmp/appimagetool
       APPIMAGETOOL="/tmp/appimagetool"
     else
@@ -305,17 +307,9 @@ let
       cp data/dev.arsfeld.Reel.desktop "$APP_DIR/"
     fi
 
-    # Copy icon
-    if [ -f data/icons/dev.arsfeld.Reel.svg ]; then
-      cp data/icons/dev.arsfeld.Reel.svg "$APP_DIR/usr/share/icons/hicolor/scalable/apps/"
-      # Convert SVG to PNG for AppImage icon
-      if command -v rsvg-convert &> /dev/null; then
-        rsvg-convert -w 256 -h 256 data/icons/dev.arsfeld.Reel.svg -o "$APP_DIR/dev.arsfeld.Reel.png"
-      else
-        # Fallback: just copy the SVG
-        cp data/icons/dev.arsfeld.Reel.svg "$APP_DIR/"
-      fi
-    fi
+    # Copy icon (also to root for AppImage)
+    cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg "$APP_DIR/usr/share/icons/hicolor/scalable/apps/"
+    cp data/icons/hicolor/scalable/apps/dev.arsfeld.Reel.svg "$APP_DIR/"
 
     # Create AppRun script
     cat > "$APP_DIR/AppRun" << 'EOF'
@@ -334,13 +328,18 @@ let
 
     # Build AppImage
     echo "Building AppImage package..."
-    ARCH=x86_64 "$APPIMAGETOOL" "$APP_DIR" "target/appimage/$PKG_NAME-$VERSION-x86_64.AppImage"
+    # appimagetool names aarch64 "arm_aarch64"
+    case "$ARCH" in
+      aarch64) TOOL_ARCH=arm_aarch64 ;;
+      *) TOOL_ARCH=$ARCH ;;
+    esac
+    ARCH=$TOOL_ARCH "$APPIMAGETOOL" "$APP_DIR" "target/appimage/$PKG_NAME-$VERSION-$ARCH.AppImage"
 
     echo ""
     echo "✓ AppImage built successfully!"
-    echo "  Package: target/appimage/$PKG_NAME-$VERSION-x86_64.AppImage"
+    echo "  Package: target/appimage/$PKG_NAME-$VERSION-$ARCH.AppImage"
     echo ""
-    echo "To run: ./target/appimage/$PKG_NAME-$VERSION-x86_64.AppImage"
+    echo "To run: ./target/appimage/$PKG_NAME-$VERSION-$ARCH.AppImage"
   '';
 
   buildAllPackages = pkgs.writeShellScriptBin "build-all-packages" ''
