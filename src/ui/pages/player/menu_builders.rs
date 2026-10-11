@@ -5,13 +5,8 @@ use relm4::gtk;
 use relm4::prelude::*;
 use tracing::debug;
 
+use super::track_preferences::TrackKind;
 use super::{PlayerInput, PlayerPage};
-
-#[derive(Clone, Copy)]
-enum TrackKind {
-    Audio,
-    Subtitle,
-}
 
 impl TrackKind {
     fn action_prefix(self) -> &'static str {
@@ -64,8 +59,10 @@ impl PlayerPage {
                 TrackKind::Subtitle => 2,
             };
             if tracks.len() < minimum_tracks {
+                if let Some(popover) = menu_button.popover() {
+                    popover.popdown();
+                }
                 menu_button.set_sensitive(false);
-                menu_button.set_popover(None::<&gtk::Popover>);
                 return;
             }
             menu_button.set_sensitive(true);
@@ -101,12 +98,28 @@ impl PlayerPage {
             let action_group = gtk::gio::SimpleActionGroup::new();
             action_group.add_action(&action);
 
-            let popover = gtk::PopoverMenu::from_model(Some(&menu));
-            Self::track_popover_visibility(popover.upcast_ref(), popover_count);
-
             menu_button.insert_action_group("player", Some(&action_group));
-            menu_button.set_popover(Some(&popover));
+            Self::menu_popover(&menu_button, popover_count).set_menu_model(Some(&menu));
         });
+    }
+
+    /// The button's menu popover, created once. Repopulating a menu only swaps
+    /// its model: replacing an open popover would never report it hidden,
+    /// leaving the popover count up and the player's shortcuts disabled.
+    fn menu_popover(
+        menu_button: &gtk::MenuButton,
+        popover_count: std::rc::Rc<std::cell::RefCell<usize>>,
+    ) -> gtk::PopoverMenu {
+        if let Some(popover) = menu_button
+            .popover()
+            .and_then(|popover| popover.downcast::<gtk::PopoverMenu>().ok())
+        {
+            return popover;
+        }
+        let popover = gtk::PopoverMenu::from_model(None::<&gtk::gio::MenuModel>);
+        Self::track_popover_visibility(popover.upcast_ref(), popover_count);
+        menu_button.set_popover(Some(&popover));
+        popover
     }
 
     /// Keep the controls visible while a popover is open
@@ -266,26 +279,6 @@ impl PlayerPage {
             menu.append_item(&item);
         }
 
-        // Create popover
-        let popover = gtk::PopoverMenu::from_model(Some(&menu));
-
-        // Track popover state to prevent control hiding
-        let popover_count_clone = popover_count.clone();
-        popover.connect_show(move |_| {
-            *popover_count_clone.borrow_mut() += 1;
-            debug!(
-                "Zoom popover shown, count: {}",
-                *popover_count_clone.borrow()
-            );
-        });
-        popover.connect_hide(move |_| {
-            let mut count = popover_count.borrow_mut();
-            if *count > 0 {
-                *count -= 1;
-            }
-            debug!("Zoom popover hidden, count: {}", *count);
-        });
-
         // Create action group
         let action_group = gtk::gio::SimpleActionGroup::new();
 
@@ -316,7 +309,7 @@ impl PlayerPage {
 
         // Insert the action group
         zoom_menu_button.insert_action_group("player", Some(&action_group));
-        zoom_menu_button.set_popover(Some(&popover));
+        Self::menu_popover(&zoom_menu_button, popover_count).set_menu_model(Some(&menu));
     }
 
     pub(super) fn populate_quality_menu(&self, sender: AsyncComponentSender<Self>) {
@@ -371,26 +364,6 @@ impl PlayerPage {
             menu.append_item(&item);
         }
 
-        // Create popover from menu model
-        let popover = gtk::PopoverMenu::from_model(Some(&menu));
-
-        // Track popover state to prevent control hiding
-        let popover_count_clone = popover_count.clone();
-        popover.connect_show(move |_| {
-            *popover_count_clone.borrow_mut() += 1;
-            debug!(
-                "Quality popover shown, count: {}",
-                *popover_count_clone.borrow()
-            );
-        });
-        popover.connect_hide(move |_| {
-            let mut count = popover_count.borrow_mut();
-            if *count > 0 {
-                *count -= 1;
-            }
-            debug!("Quality popover hidden, count: {}", *count);
-        });
-
         // Add actions for each mode
         let action_group = gtk::gio::SimpleActionGroup::new();
         for (mode, label, _) in modes {
@@ -406,6 +379,6 @@ impl PlayerPage {
 
         // Insert the action group
         quality_menu_button.insert_action_group("player", Some(&action_group));
-        quality_menu_button.set_popover(Some(&popover));
+        Self::menu_popover(&quality_menu_button, popover_count).set_menu_model(Some(&menu));
     }
 }

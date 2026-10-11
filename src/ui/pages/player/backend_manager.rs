@@ -110,6 +110,7 @@ impl PlayerPage {
         self.current_upscaling_mode = Self::mpv_upscaling_mode_from_config(config);
         self.error_retry_manager.clear_error();
 
+        self.flush_delay_save();
         if let Some(existing_player) = self.player.take() {
             let handle = existing_player.clone();
             glib::spawn_future_local(async move {
