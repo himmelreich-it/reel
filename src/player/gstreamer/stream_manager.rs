@@ -15,6 +15,8 @@ pub struct StreamInfo {
     pub index: i32,
     pub language: Option<String>,
     pub codec: Option<String>,
+    /// The container marks this stream as selected by default
+    pub default: bool,
 }
 
 /// The stream's title tag, if the container provides one.
@@ -120,6 +122,7 @@ impl StreamManager {
                     index: 0,
                     language: language.clone(),
                     codec: codec.clone(),
+                    default: stream.stream_flags().contains(gst::StreamFlags::SELECT),
                 };
 
                 if stream_type.contains(gst::StreamType::VIDEO) {
@@ -312,6 +315,8 @@ impl StreamManager {
                 name: track_name,
                 language: stream.language.clone(),
                 title,
+                forced: false,
+                default: stream.default,
             });
         }
 
@@ -363,6 +368,8 @@ impl StreamManager {
                 name: track_name,
                 language: stream.language.clone(),
                 title,
+                forced: false,
+                default: stream.default,
             });
         }
 

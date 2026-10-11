@@ -90,9 +90,12 @@ mod tests {
         let config = Config::default();
         let player = MpvPlayer::new(&config).expect("Failed to create MpvPlayer");
 
-        // Setting track when no media is loaded should succeed (MPV handles it gracefully)
+        // Without an mpv instance (no media loaded yet) the change must be reported
         let result = player.set_audio_track(0).await;
-        assert!(result.is_ok(), "Setting audio track should not fail");
+        assert!(
+            result.is_err(),
+            "Setting audio track without mpv should fail"
+        );
     }
 
     #[tokio::test]
@@ -100,13 +103,18 @@ mod tests {
         let config = Config::default();
         let player = MpvPlayer::new(&config).expect("Failed to create MpvPlayer");
 
-        // Test disabling subtitles
+        // Without an mpv instance (no media loaded yet) changes must be reported
         let result = player.set_subtitle_track(-1).await;
-        assert!(result.is_ok(), "Disabling subtitles should not fail");
+        assert!(
+            result.is_err(),
+            "Disabling subtitles without mpv should fail"
+        );
 
-        // Test setting a specific track
         let result = player.set_subtitle_track(0).await;
-        assert!(result.is_ok(), "Setting subtitle track should not fail");
+        assert!(
+            result.is_err(),
+            "Setting subtitle track without mpv should fail"
+        );
     }
 
     #[tokio::test]
@@ -565,6 +573,9 @@ impl MpvPlayer {
                 glib::timeout_add_local_once(std::time::Duration::from_millis(100), move || {
                     if let Some(ref mpv) = *inner_clone.mpv.lock().unwrap() {
                         debug!("Actually loading media now: {}", url_clone);
+                        if let Err(e) = reset_per_file_state(mpv) {
+                            error!("Failed to reset tracks and delays: {}", e);
+                        }
                         if let Err(e) = mpv.command("loadfile", &[&url_clone, "replace"]) {
                             error!("Failed to load pending media: {:?}", e);
                         }
@@ -885,6 +896,7 @@ impl MpvPlayer {
 
         // Load the media file
         if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
+            reset_per_file_state(mpv)?;
             mpv.command("loadfile", &[url, "replace"])
                 .map_err(|e| anyhow::anyhow!("Failed to load media: {:?}", e))?;
             debug!("Media load command sent");
@@ -1131,6 +1143,10 @@ impl MpvPlayer {
                 let language = mpv
                     .get_property::<String>(&format!("track-list/{}/lang", i))
                     .ok();
+                let flag = |name: &str| {
+                    mpv.get_property::<bool>(&format!("track-list/{}/{}", i, name))
+                        .unwrap_or(false)
+                };
 
                 let name = match (&title, &language) {
                     (Some(title), _) => title.clone(),
@@ -1147,6 +1163,8 @@ impl MpvPlayer {
                     name,
                     language,
                     title,
+                    forced: flag("forced"),
+                    default: flag("default"),
                 });
             }
         }
@@ -1165,27 +1183,26 @@ impl MpvPlayer {
     }
 
     pub async fn set_audio_track(&self, track_index: i32) -> Result<()> {
-        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
-            mpv.set_property("aid", track_index as i64)
-                .map_err(|e| anyhow::anyhow!("Failed to set audio track: {:?}", e))?;
-            debug!("Set audio track to {}", track_index);
-        }
+        let guard = self.inner.mpv.lock().unwrap();
+        let mpv = guard.as_ref().ok_or_else(mpv_not_initialized)?;
+        mpv.set_property("aid", track_index as i64)
+            .map_err(|e| anyhow::anyhow!("Failed to set audio track: {:?}", e))?;
+        debug!("Set audio track to {}", track_index);
         Ok(())
     }
 
     pub async fn set_subtitle_track(&self, track_index: i32) -> Result<()> {
-        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
-            if track_index < 0 {
-                // Disable subtitles
-                mpv.set_property("sid", "no")
-                    .map_err(|e| anyhow::anyhow!("Failed to disable subtitles: {:?}", e))?;
-                debug!("Disabled subtitles");
-            } else {
-                // Enable subtitles and set track
-                mpv.set_property("sid", track_index as i64)
-                    .map_err(|e| anyhow::anyhow!("Failed to set subtitle track: {:?}", e))?;
-                debug!("Set subtitle track to {}", track_index);
-            }
+        let guard = self.inner.mpv.lock().unwrap();
+        let mpv = guard.as_ref().ok_or_else(mpv_not_initialized)?;
+        if track_index < 0 {
+            // Disable subtitles; reset_per_file_state undoes this for the next file
+            mpv.set_property("sid", "no")
+                .map_err(|e| anyhow::anyhow!("Failed to disable subtitles: {:?}", e))?;
+            debug!("Disabled subtitles");
+        } else {
+            mpv.set_property("sid", track_index as i64)
+                .map_err(|e| anyhow::anyhow!("Failed to set subtitle track: {:?}", e))?;
+            debug!("Set subtitle track to {}", track_index);
         }
         Ok(())
     }
@@ -1229,19 +1246,19 @@ impl MpvPlayer {
 
     /// Delay audio relative to video, in seconds (negative plays audio earlier).
     pub async fn set_audio_delay(&self, seconds: f64) -> Result<()> {
-        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
-            mpv.set_property("audio-delay", seconds)
-                .map_err(|e| anyhow::anyhow!("Failed to set audio-delay: {:?}", e))?;
-        }
+        let guard = self.inner.mpv.lock().unwrap();
+        let mpv = guard.as_ref().ok_or_else(mpv_not_initialized)?;
+        mpv.set_property("audio-delay", seconds)
+            .map_err(|e| anyhow::anyhow!("Failed to set audio-delay: {:?}", e))?;
         Ok(())
     }
 
     /// Delay subtitles relative to video, in seconds (negative shows them earlier).
     pub async fn set_subtitle_delay(&self, seconds: f64) -> Result<()> {
-        if let Some(ref mpv) = *self.inner.mpv.lock().unwrap() {
-            mpv.set_property("sub-delay", seconds)
-                .map_err(|e| anyhow::anyhow!("Failed to set sub-delay: {:?}", e))?;
-        }
+        let guard = self.inner.mpv.lock().unwrap();
+        let mpv = guard.as_ref().ok_or_else(mpv_not_initialized)?;
+        mpv.set_property("sub-delay", seconds)
+            .map_err(|e| anyhow::anyhow!("Failed to set sub-delay: {:?}", e))?;
         Ok(())
     }
 
@@ -1371,20 +1388,18 @@ impl MpvPlayer {
     }
 
     pub async fn cycle_subtitle_track(&self) -> Result<()> {
-        let inner = self.inner.clone();
-        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
-            mpv.command("cycle", &["sub"])
-                .map_err(|e| anyhow::anyhow!("Failed to cycle subtitle track: {:?}", e))?;
-        }
+        let guard = self.inner.mpv.lock().unwrap();
+        let mpv = guard.as_ref().ok_or_else(mpv_not_initialized)?;
+        mpv.command("cycle", &["sub"])
+            .map_err(|e| anyhow::anyhow!("Failed to cycle subtitle track: {:?}", e))?;
         Ok(())
     }
 
     pub async fn cycle_audio_track(&self) -> Result<()> {
-        let inner = self.inner.clone();
-        if let Some(ref mpv) = *inner.mpv.lock().unwrap() {
-            mpv.command("cycle", &["audio"])
-                .map_err(|e| anyhow::anyhow!("Failed to cycle audio track: {:?}", e))?;
-        }
+        let guard = self.inner.mpv.lock().unwrap();
+        let mpv = guard.as_ref().ok_or_else(mpv_not_initialized)?;
+        mpv.command("cycle", &["audio"])
+            .map_err(|e| anyhow::anyhow!("Failed to cycle audio track: {:?}", e))?;
         Ok(())
     }
 
@@ -1597,6 +1612,25 @@ impl MpvPlayerInner {
     }
 }
 
+fn mpv_not_initialized() -> anyhow::Error {
+    anyhow::anyhow!("MPV not initialized")
+}
+
+/// Undo per-file choices before loading the next file. mpv keeps `sid=no`
+/// and both delays across `loadfile`, which would carry "subtitles off" and
+/// the previous file's sync into the next title.
+fn reset_per_file_state(mpv: &Mpv) -> Result<()> {
+    mpv.set_property("aid", "auto")
+        .map_err(|e| anyhow::anyhow!("Failed to reset aid: {:?}", e))?;
+    mpv.set_property("sid", "auto")
+        .map_err(|e| anyhow::anyhow!("Failed to reset sid: {:?}", e))?;
+    mpv.set_property("audio-delay", 0.0)
+        .map_err(|e| anyhow::anyhow!("Failed to reset audio-delay: {:?}", e))?;
+    mpv.set_property("sub-delay", 0.0)
+        .map_err(|e| anyhow::anyhow!("Failed to reset sub-delay: {:?}", e))?;
+    Ok(())
+}
+
 fn apply_track_languages(mpv: &Mpv, alang: &str, slang: &str) -> Result<()> {
     mpv.set_property("alang", alang)
         .map_err(|e| anyhow::anyhow!("Failed to set alang: {:?}", e))?;
@@ -1605,24 +1639,48 @@ fn apply_track_languages(mpv: &Mpv, alang: &str, slang: &str) -> Result<()> {
     Ok(())
 }
 
+/// Apply every style property, so one an older mpv lacks (such as
+/// `sub-border-style=background-box`) doesn't keep the others from applying.
 fn apply_subtitle_style(mpv: &Mpv, style: &SubtitleStyle) -> Result<()> {
-    mpv.set_property("sub-font-size", style.font_size as i64)
-        .map_err(|e| anyhow::anyhow!("Failed to set sub-font-size: {:?}", e))?;
-    mpv.set_property("sub-color", style.color.as_str())
-        .map_err(|e| anyhow::anyhow!("Failed to set sub-color: {:?}", e))?;
-    mpv.set_property("sub-border-size", style.border_size)
-        .map_err(|e| anyhow::anyhow!("Failed to set sub-border-size: {:?}", e))?;
     let border_style = if style.background {
         "background-box"
     } else {
         "outline-and-shadow"
     };
-    mpv.set_property("sub-border-style", border_style)
-        .map_err(|e| anyhow::anyhow!("Failed to set sub-border-style: {:?}", e))?;
-    // mpv colours with alpha are #AARRGGBB
-    mpv.set_property("sub-back-color", "#A0000000")
-        .map_err(|e| anyhow::anyhow!("Failed to set sub-back-color: {:?}", e))?;
-    Ok(())
+    let failures: Vec<String> = [
+        (
+            "sub-font-size",
+            mpv.set_property("sub-font-size", style.font_size as i64),
+        ),
+        (
+            "sub-color",
+            mpv.set_property("sub-color", style.color.as_str()),
+        ),
+        (
+            "sub-border-size",
+            mpv.set_property("sub-border-size", style.border_size),
+        ),
+        (
+            "sub-border-style",
+            mpv.set_property("sub-border-style", border_style),
+        ),
+        // mpv colours with alpha are #AARRGGBB
+        (
+            "sub-back-color",
+            mpv.set_property("sub-back-color", "#A0000000"),
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(property, result)| result.err().map(|e| format!("{}: {:?}", property, e)))
+    .collect();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!(
+            "Failed to set subtitle style ({})",
+            failures.join(", ")
+        ))
+    }
 }
 
 impl Drop for MpvPlayerInner {

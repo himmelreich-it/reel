@@ -395,15 +395,18 @@ impl Player {
 
     /// Set the preferred audio and subtitle languages (ISO 639-1 codes, empty for none).
     ///
-    /// mpv picks matching tracks itself when a file loads. GStreamer has no
-    /// equivalent; the player page selects tracks after load on both backends.
+    /// The player page selects the final tracks once a file is ready. mpv
+    /// starts playing as soon as it loads a file, so it gets the languages too
+    /// and starts in the right language. GStreamer selects nothing before the
+    /// page does, so it has nothing to configure.
+    #[cfg_attr(
+        not(all(feature = "mpv", not(target_os = "macos"))),
+        allow(unused_variables)
+    )]
     pub async fn set_track_languages(&self, audio: &str, subtitle: &str) -> Result<()> {
         match self {
             #[cfg(feature = "gstreamer")]
-            Player::GStreamer(_) => {
-                let _ = (audio, subtitle);
-                Ok(())
-            }
+            Player::GStreamer(_) => Ok(()),
             #[cfg(all(feature = "mpv", not(target_os = "macos")))]
             Player::Mpv(p) => p.set_track_languages(audio, subtitle).await,
         }

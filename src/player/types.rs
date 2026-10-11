@@ -77,9 +77,24 @@ pub struct TrackInfo {
     pub name: String,
     pub language: Option<String>,
     pub title: Option<String>,
+    /// Marked as forced (only parts in another language). GStreamer doesn't
+    /// expose the container's forced flag, so there only the title tells.
+    pub forced: bool,
+    /// Marked as the file's default track
+    pub default: bool,
 }
 
 impl TrackInfo {
+    /// Forced by its flag or by a title like "English (Forced)", which is how
+    /// many releases mark forced subtitles.
+    pub fn is_forced(&self) -> bool {
+        self.forced
+            || self
+                .title
+                .as_deref()
+                .is_some_and(|title| title.to_lowercase().contains("forced"))
+    }
+
     /// The "no subtitles" entry that heads every subtitle track list.
     pub fn subtitles_off() -> Self {
         Self {
@@ -87,6 +102,8 @@ impl TrackInfo {
             name: "None".to_string(),
             language: None,
             title: None,
+            forced: false,
+            default: false,
         }
     }
 }
