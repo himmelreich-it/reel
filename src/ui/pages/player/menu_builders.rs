@@ -129,6 +129,8 @@ impl PlayerPage {
             let limit = Self::MAX_DELAY_MS as f64;
             let spin = gtk::SpinButton::with_range(-limit, limit, 50.0);
             spin.set_digits(0);
+            // Only digits and a minus sign can be typed
+            spin.set_numeric(true);
             spin.set_value(0.0);
             let sender = sender.clone();
             spin.connect_value_changed(move |spin| {
