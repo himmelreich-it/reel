@@ -15,17 +15,107 @@ use crate::player::{PlayerHandle, TrackInfo, language};
 use crate::services::config_service::CONFIG_SERVICE;
 use anyhow::Result;
 use gtk::glib;
+use gtk::prelude::*;
 use relm4::gtk;
 use relm4::prelude::*;
 use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::{debug, info, warn};
+
+#[derive(Debug, Clone, Copy)]
+pub enum DelayKind {
+    Audio,
+    Subtitle,
+}
 
 impl PlayerPage {
     pub(super) const MAX_DELAY_MS: i64 = 10_000;
 
     pub(super) fn clamp_delay(delay_ms: i64) -> i64 {
         delay_ms.clamp(-Self::MAX_DELAY_MS, Self::MAX_DELAY_MS)
+    }
+
+    const DELAY_SAVE_DEBOUNCE: Duration = Duration::from_millis(1000);
+    const OSD_MESSAGE_TIMEOUT: Duration = Duration::from_millis(1500);
+
+    /// Apply a delay right away; saving waits until the user stops adjusting.
+    pub(super) fn change_delay(
+        &mut self,
+        kind: DelayKind,
+        delay_ms: i64,
+        sender: &AsyncComponentSender<Self>,
+    ) {
+        let delay_ms = Self::clamp_delay(delay_ms);
+        let current = match kind {
+            DelayKind::Audio => self.audio_delay_ms,
+            DelayKind::Subtitle => self.subtitle_delay_ms,
+        };
+        // The spin buttons echo programmatic changes back; ignore those
+        let Some(player) = self.player.clone() else {
+            return;
+        };
+        if delay_ms == current {
+            return;
+        }
+
+        match kind {
+            DelayKind::Audio => {
+                self.audio_delay_ms = delay_ms;
+                self.audio_delay_spin.set_value(delay_ms as f64);
+            }
+            DelayKind::Subtitle => {
+                self.subtitle_delay_ms = delay_ms;
+                self.subtitle_delay_spin.set_value(delay_ms as f64);
+            }
+        }
+
+        glib::spawn_future_local(async move {
+            let seconds = delay_ms as f64 / 1000.0;
+            let result = match kind {
+                DelayKind::Audio => player.set_audio_delay(seconds).await,
+                DelayKind::Subtitle => player.set_subtitle_delay(seconds).await,
+            };
+            if let Err(e) = result {
+                warn!("Failed to set {:?} delay: {}", kind, e);
+            }
+        });
+
+        self.delay_save_generation += 1;
+        let generation = self.delay_save_generation;
+        let sender = sender.clone();
+        glib::timeout_add_local_once(Self::DELAY_SAVE_DEBOUNCE, move || {
+            sender.input(PlayerInput::SaveDelays(generation));
+        });
+    }
+
+    /// Persist the delays unless another change came in since `generation` was scheduled.
+    pub(super) fn save_delays(&self, generation: u64, sender: &AsyncComponentSender<Self>) {
+        if generation == self.delay_save_generation {
+            self.remember_tracks_after(sender, async { Ok(()) });
+        }
+    }
+
+    /// Show a short message over the video, replacing any message still showing.
+    pub(super) fn show_osd_message(
+        &mut self,
+        message: String,
+        sender: &AsyncComponentSender<Self>,
+    ) {
+        self.osd_message.set_label(&message);
+        self.osd_message.set_visible(true);
+        self.osd_message_generation += 1;
+        let generation = self.osd_message_generation;
+        let sender = sender.clone();
+        glib::timeout_add_local_once(Self::OSD_MESSAGE_TIMEOUT, move || {
+            sender.input(PlayerInput::HideOsdMessage(generation));
+        });
+    }
+
+    pub(super) fn hide_osd_message(&self, generation: u64) {
+        if generation == self.osd_message_generation {
+            self.osd_message.set_visible(false);
+        }
     }
 
     /// Run a track or delay change the user made, then remember the result

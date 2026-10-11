@@ -36,7 +36,7 @@ use seek_bar::SeekBarManager;
 mod volume;
 use volume::VolumeManager;
 mod track_preferences;
-use track_preferences::AppliedTracks;
+use track_preferences::{AppliedTracks, DelayKind};
 
 fn format_duration(duration: Duration) -> String {
     let total_secs = duration.as_secs();
@@ -95,6 +95,11 @@ pub struct PlayerPage {
     subtitle_delay_spin: gtk::SpinButton,
     audio_delay_ms: i64,
     subtitle_delay_ms: i64,
+    // Bumped on every delay change; only the latest scheduled save runs
+    delay_save_generation: u64,
+    // Short feedback shown over the video (e.g. delay changes)
+    osd_message: gtk::Label,
+    osd_message_generation: u64,
     // Auto-play management
     auto_play_manager: AutoPlayManager,
     // Video quality (upscaling) state
@@ -155,6 +160,8 @@ pub enum PlayerInput {
     AdjustAudioDelay(i64),
     AdjustSubtitleDelay(i64),
     ResetDelays,
+    SaveDelays(u64),
+    HideOsdMessage(u64),
     PlayPause,
     Stop,
     Seek(Duration),
@@ -410,6 +417,9 @@ impl AsyncComponent for PlayerPage {
 
             // Buffering overlay
             add_overlay = model.buffering_overlay.widget(),
+
+            // Short feedback messages (e.g. delay changes)
+            add_overlay = &model.osd_message.clone(),
 
             // Skip intro button overlay
             add_overlay = &gtk::Box {
@@ -757,6 +767,16 @@ impl AsyncComponent for PlayerPage {
             subtitle_delay_spin,
             audio_delay_ms: 0,
             subtitle_delay_ms: 0,
+            delay_save_generation: 0,
+            osd_message: gtk::Label::builder()
+                .halign(gtk::Align::Center)
+                .valign(gtk::Align::Start)
+                .margin_top(48)
+                .css_classes(["player-osd-message"])
+                .visible(false)
+                .can_target(false)
+                .build(),
+            osd_message_generation: 0,
             auto_play_manager: AutoPlayManager::new(),
             quality_menu_button: quality_menu_button.clone(),
             current_upscaling_mode: Self::mpv_upscaling_mode_from_config(&config),
@@ -1991,57 +2011,33 @@ impl AsyncComponent for PlayerPage {
                 sender.input(PlayerInput::UpdateTrackMenus);
             }
             PlayerInput::SetAudioDelay(delay_ms) => {
-                // The spin button echoes programmatic changes back; ignore those
-                if delay_ms != self.audio_delay_ms
-                    && let Some(player) = &self.player
-                {
-                    self.audio_delay_ms = delay_ms;
-                    self.audio_delay_spin.set_value(delay_ms as f64);
-                    let player_handle = player.clone();
-                    self.remember_tracks_after(&sender, async move {
-                        player_handle
-                            .set_audio_delay(delay_ms as f64 / 1000.0)
-                            .await
-                    });
-                }
+                self.change_delay(DelayKind::Audio, delay_ms, &sender);
             }
             PlayerInput::SetSubtitleDelay(delay_ms) => {
-                if delay_ms != self.subtitle_delay_ms
-                    && let Some(player) = &self.player
-                {
-                    self.subtitle_delay_ms = delay_ms;
-                    self.subtitle_delay_spin.set_value(delay_ms as f64);
-                    let player_handle = player.clone();
-                    self.remember_tracks_after(&sender, async move {
-                        player_handle
-                            .set_subtitle_delay(delay_ms as f64 / 1000.0)
-                            .await
-                    });
-                }
+                self.change_delay(DelayKind::Subtitle, delay_ms, &sender);
             }
             PlayerInput::AdjustAudioDelay(step_ms) => {
-                let delay_ms = Self::clamp_delay(self.audio_delay_ms + step_ms);
-                if self.player.is_some() && delay_ms != self.audio_delay_ms {
-                    sender.input(PlayerInput::SetAudioDelay(delay_ms));
-                    sender
-                        .output(PlayerOutput::ShowToast(format!(
-                            "Audio delay: {} ms",
-                            delay_ms
-                        )))
-                        .ok();
-                }
+                // Update state here rather than via another input, so quick
+                // repeated presses each build on the previous one
+                self.change_delay(DelayKind::Audio, self.audio_delay_ms + step_ms, &sender);
+                self.show_osd_message(format!("Audio delay: {} ms", self.audio_delay_ms), &sender);
             }
             PlayerInput::AdjustSubtitleDelay(step_ms) => {
-                let delay_ms = Self::clamp_delay(self.subtitle_delay_ms + step_ms);
-                if self.player.is_some() && delay_ms != self.subtitle_delay_ms {
-                    sender.input(PlayerInput::SetSubtitleDelay(delay_ms));
-                    sender
-                        .output(PlayerOutput::ShowToast(format!(
-                            "Subtitle delay: {} ms",
-                            delay_ms
-                        )))
-                        .ok();
-                }
+                self.change_delay(
+                    DelayKind::Subtitle,
+                    self.subtitle_delay_ms + step_ms,
+                    &sender,
+                );
+                self.show_osd_message(
+                    format!("Subtitle delay: {} ms", self.subtitle_delay_ms),
+                    &sender,
+                );
+            }
+            PlayerInput::SaveDelays(generation) => {
+                self.save_delays(generation, &sender);
+            }
+            PlayerInput::HideOsdMessage(generation) => {
+                self.hide_osd_message(generation);
             }
             PlayerInput::ResetDelays => {
                 sender.input(PlayerInput::SetAudioDelay(0));
