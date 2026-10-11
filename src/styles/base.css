@@ -569,3 +569,20 @@ statuspage > box {
     min-width: 0;
     min-height: 0;
 }
+
+/* Subtitle style preview in preferences */
+.subtitle-preview {
+    border-radius: 12px;
+    background-image: radial-gradient(
+        ellipse at 60% 30%,
+        #34404b 0%,
+        #161c22 70%,
+        #0b0e11 100%
+    );
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.subtitle-preview-text {
+    font-weight: 600;
+    border-radius: 4px;
+}

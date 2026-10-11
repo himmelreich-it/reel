@@ -24,6 +24,9 @@ pub struct PreferencesDialog {
     auto_clean_cache: bool,
     #[do_not_track]
     subtitle_style_rows: SubtitleStyleRows,
+    // Styles the subtitle preview after the current rows
+    #[do_not_track]
+    preview_css: gtk::CssProvider,
 }
 
 /// The rows that make up the subtitle style, read together whenever one changes
@@ -33,6 +36,49 @@ struct SubtitleStyleRows {
     color: gtk::ColorDialogButton,
     border_size: adw::SpinRow,
     background: adw::SwitchRow,
+}
+
+/// CSS that makes the preview text look like subtitles in this style. The
+/// preview is about half the size of the video, so sizes are scaled down.
+fn subtitle_preview_css(style: &SubtitleStyle) -> String {
+    let outline = style.border_size.max(0.0) * 0.6;
+    let shadow = if outline > 0.0 {
+        [
+            (1, 0),
+            (-1, 0),
+            (0, 1),
+            (0, -1),
+            (1, 1),
+            (-1, -1),
+            (1, -1),
+            (-1, 1),
+        ]
+        .iter()
+        .map(|(x, y)| {
+            format!(
+                "{}px {}px 0 black",
+                *x as f64 * outline,
+                *y as f64 * outline
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+    } else {
+        "none".to_string()
+    };
+    let (background, padding) = if style.background {
+        ("rgba(0, 0, 0, 0.7)", "4px 10px")
+    } else {
+        ("transparent", "0")
+    };
+    format!(
+        ".subtitle-preview-text {{ font-size: {}px; color: {}; text-shadow: {}; background-color: {}; padding: {}; }}",
+        (style.font_size as f64 * 0.55).round(),
+        style.color,
+        shadow,
+        background,
+        padding
+    )
 }
 
 impl SubtitleStyleRows {
@@ -115,10 +161,32 @@ fn build_playback_page(
     ));
     page.add(&languages);
 
-    let style = adw::PreferencesGroup::builder()
+    // The preview sits between the group's description and its rows, so the
+    // rows get a group of their own
+    let preview_group = adw::PreferencesGroup::builder()
         .title("Subtitle Style")
         .description("Applies to text subtitles. Styled (ASS) subtitles keep their own look. GStreamer only uses the size.")
         .build();
+    let preview = gtk::Overlay::builder()
+        .height_request(160)
+        .overflow(gtk::Overflow::Hidden)
+        .css_classes(["subtitle-preview"])
+        .child(&gtk::Box::new(gtk::Orientation::Vertical, 0))
+        .build();
+    preview.add_overlay(
+        &gtk::Label::builder()
+            .label("This is how subtitles will look.")
+            .halign(gtk::Align::Center)
+            .valign(gtk::Align::End)
+            .margin_bottom(20)
+            .css_classes(["subtitle-preview-text"])
+            .build(),
+    );
+    preview.update_property(&[gtk::accessible::Property::Label("Subtitle preview")]);
+    preview_group.add(&preview);
+    page.add(&preview_group);
+
+    let style = adw::PreferencesGroup::new();
     let rows = SubtitleStyleRows {
         font_size: adw::SpinRow::builder()
             .title("Size")
@@ -229,8 +297,8 @@ impl AsyncComponent for PreferencesDialog {
         #[root]
         adw::PreferencesDialog {
             set_title: "Preferences",
-            set_content_width: 500,
-            set_content_height: 400,
+            set_content_width: 640,
+            set_content_height: 760,
 
             // Close button is automatically provided by PreferencesDialog
             connect_closed => PreferencesDialogInput::Close,
@@ -295,6 +363,13 @@ impl AsyncComponent for PreferencesDialog {
         // Load preferences from ConfigService
         let config = CONFIG_SERVICE.get_config().await;
         let (playback_page, subtitle_style_rows) = build_playback_page(&config.playback, &sender);
+        let preview_css = gtk::CssProvider::new();
+        preview_css.load_from_string(&subtitle_preview_css(&subtitle_style_rows.style()));
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("a display while showing preferences"),
+            &preview_css,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
 
         let model = Self {
             db,
@@ -304,6 +379,7 @@ impl AsyncComponent for PreferencesDialog {
             cache_size_mb: config.playback.mpv_cache_size_mb as i32,
             auto_clean_cache: true,
             subtitle_style_rows,
+            preview_css,
             tracker: 0,
         };
 
@@ -361,6 +437,8 @@ impl AsyncComponent for PreferencesDialog {
             }
             PreferencesDialogInput::SubtitleStyleChanged => {
                 let style = self.subtitle_style_rows.style();
+                self.preview_css
+                    .load_from_string(&subtitle_preview_css(&style));
                 relm4::spawn_local(async move {
                     if let Err(e) = CONFIG_SERVICE
                         .update_playback(|p| {
@@ -385,6 +463,9 @@ impl AsyncComponent for PreferencesDialog {
                 });
             }
             PreferencesDialogInput::Close => {
+                if let Some(display) = gtk::gdk::Display::default() {
+                    gtk::style_context_remove_provider_for_display(&display, &self.preview_css);
+                }
                 root.close();
                 sender.output(PreferencesDialogOutput::Closed).unwrap();
             }
