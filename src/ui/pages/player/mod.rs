@@ -2021,9 +2021,7 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::TrackPreferencesApplied(delays) => {
-                self.audio_delay_ms = delays.audio_ms;
-                self.subtitle_delay_ms = delays.subtitle_ms;
-                self.show_delays();
+                self.delays_applied(delays);
                 sender.input(PlayerInput::UpdateTrackMenus);
             }
             PlayerInput::SetAudioDelay(delay_ms) => {
@@ -2413,7 +2411,7 @@ impl AsyncComponent for PlayerPage {
     }
 
     fn shutdown(&mut self, _widgets: &mut Self::Widgets, _output: relm4::Sender<Self::Output>) {
-        self.flush_delay_save();
+        self.flush_delay_save_blocking();
 
         // Unsubscribe from MessageBroker
         relm4::spawn(async move {

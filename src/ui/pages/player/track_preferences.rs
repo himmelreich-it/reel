@@ -110,25 +110,78 @@ impl PlayerPage {
     /// Save a delay change that is still waiting for its debounce, for the
     /// title it was made on. Call before the title changes or playback ends.
     pub(super) fn flush_delay_save(&mut self) {
-        if !self.delay_save_pending {
+        if let Some(save) = self.take_pending_delay_save() {
+            glib::spawn_future_local(save);
+        }
+    }
+
+    /// Like `flush_delay_save`, but waits for the save: the main loop stops
+    /// when the player shuts down, so a save left to it might never run. The
+    /// save runs on the background runtime; the wait is bounded because a
+    /// track save still running on the blocked main loop may hold the save lock.
+    pub(super) fn flush_delay_save_blocking(&mut self) {
+        const SHUTDOWN_SAVE_TIMEOUT: Duration = Duration::from_secs(2);
+        let Some(save) = self.take_pending_delay_save() else {
             return;
+        };
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        relm4::spawn(async move {
+            save.await;
+            let _ = done_tx.send(());
+        });
+        if done_rx.recv_timeout(SHUTDOWN_SAVE_TIMEOUT).is_err() {
+            warn!("Sync delays were not saved before shutdown");
+        }
+    }
+
+    fn take_pending_delay_save(&mut self) -> Option<impl Future<Output = ()> + Send + 'static> {
+        if !self.delay_save_pending {
+            return None;
         }
         self.delay_save_pending = false;
         // A timer still running for this change finds a newer generation and does nothing
         self.delay_save_generation += 1;
-        let Some(media_id) = self.media_item_id.clone() else {
-            return;
-        };
+        let media_id = self.media_item_id.clone()?;
         let db = self.db.clone();
         let change = PreferenceChange::Delays {
             audio_ms: self.audio_delay_ms,
             subtitle_ms: self.subtitle_delay_ms,
         };
-        glib::spawn_future_local(async move {
+        Some(async move {
             if let Err(e) = save_preference_change(&db, &media_id, change).await {
                 warn!("Failed to save sync delays: {}", e);
             }
-        });
+        })
+    }
+
+    /// Take the delays applied for a freshly loaded title, unless the title
+    /// changed meanwhile or the user already adjusted the delays while it loaded.
+    pub(super) fn delays_applied(&mut self, delays: AppliedDelays) {
+        if self.media_item_id.as_ref() != Some(&delays.media_id) {
+            debug!(
+                "Ignoring delays applied for {} after switching title",
+                delays.media_id
+            );
+            return;
+        }
+        if self.delay_save_pending {
+            // The user's change reached the player before the saved delays did
+            if let Some(player) = self.player.clone() {
+                let (audio_ms, subtitle_ms) = (self.audio_delay_ms, self.subtitle_delay_ms);
+                glib::spawn_future_local(async move {
+                    if let Err(e) = player.set_audio_delay(audio_ms as f64 / 1000.0).await {
+                        warn!("Failed to restore audio delay: {}", e);
+                    }
+                    if let Err(e) = player.set_subtitle_delay(subtitle_ms as f64 / 1000.0).await {
+                        warn!("Failed to restore subtitle delay: {}", e);
+                    }
+                });
+            }
+            return;
+        }
+        self.audio_delay_ms = delays.audio_ms;
+        self.subtitle_delay_ms = delays.subtitle_ms;
+        self.show_delays();
     }
 
     /// Start a new title: save what is pending for the previous one, then
@@ -200,6 +253,7 @@ pub enum TrackKind {
 /// Delays in effect after applying preferences to a freshly loaded title
 #[derive(Debug, Clone)]
 pub struct AppliedDelays {
+    pub media_id: MediaItemId,
     pub audio_ms: i64,
     pub subtitle_ms: i64,
 }
@@ -213,21 +267,28 @@ pub async fn apply_track_preferences(
     let repo = TrackPreferenceRepositoryImpl::new(db.as_ref().clone());
     let own = repo.find_by_media_id(media_id.as_ref()).await?;
 
-    // Delays are specific to this file, so they only come from its own row
+    // Delays are specific to this file, so they only come from its own row.
+    // A delay the player rejects stays at 0, where every load starts.
+    let wanted = |delay_ms: Option<i64>| delay_ms.map_or(0, PlayerPage::clamp_delay);
+    let audio_ms = wanted(own.as_ref().map(|p| p.audio_delay_ms));
+    let subtitle_ms = wanted(own.as_ref().map(|p| p.subtitle_delay_ms));
     let delays = AppliedDelays {
-        audio_ms: own
-            .as_ref()
-            .map_or(0, |p| PlayerPage::clamp_delay(p.audio_delay_ms)),
-        subtitle_ms: own
-            .as_ref()
-            .map_or(0, |p| PlayerPage::clamp_delay(p.subtitle_delay_ms)),
+        media_id: media_id.clone(),
+        audio_ms: match player.set_audio_delay(audio_ms as f64 / 1000.0).await {
+            Ok(()) => audio_ms,
+            Err(e) => {
+                warn!("Failed to set audio delay: {}", e);
+                0
+            }
+        },
+        subtitle_ms: match player.set_subtitle_delay(subtitle_ms as f64 / 1000.0).await {
+            Ok(()) => subtitle_ms,
+            Err(e) => {
+                warn!("Failed to set subtitle delay: {}", e);
+                0
+            }
+        },
     };
-    player
-        .set_audio_delay(delays.audio_ms as f64 / 1000.0)
-        .await?;
-    player
-        .set_subtitle_delay(delays.subtitle_ms as f64 / 1000.0)
-        .await?;
 
     let remembered = match own {
         Some(preference) => Some(preference),
@@ -277,7 +338,13 @@ enum PreferenceChange {
 }
 
 impl PreferenceChange {
-    fn apply_to(self, preference: &mut TrackPreferenceModel) {
+    /// Merge the change into a preference. Only track choices update its
+    /// time: other episodes take the show's most recent track choice, which a
+    /// delay change isn't.
+    fn apply_to(self, preference: &mut TrackPreferenceModel, now: chrono::NaiveDateTime) {
+        if !matches!(self, PreferenceChange::Delays { .. }) {
+            preference.updated_at = now;
+        }
         match self {
             PreferenceChange::Audio(track) => {
                 preference.audio_language = track.language;
@@ -354,8 +421,7 @@ async fn save_preference_change(
     };
 
     let mut preference = base_preference(own, show_latest, media_id, show_id);
-    change.apply_to(&mut preference);
-    preference.updated_at = chrono::Utc::now().naive_utc();
+    change.apply_to(&mut preference, chrono::Utc::now().naive_utc());
     debug!("Saving track preferences: {:?}", preference);
     repo.save(preference).await
 }
@@ -438,11 +504,14 @@ fn choose_track(
     let same_language =
         |t: &&TrackInfo| t.language.as_deref().map(language::canonical) == remembered_language;
     if remembered_language.is_some() || remembered_title.is_some() {
-        // A remembered title is a deliberate choice, even a forced track
-        let exact = tracks
-            .iter()
-            .filter(same_language)
-            .find(|t| t.title.as_deref() == remembered_title);
+        // A remembered title is a deliberate choice, even a forced track.
+        // Without one, untitled tracks are told apart only by the ranking.
+        let exact = remembered_title.and_then(|title| {
+            tracks
+                .iter()
+                .filter(same_language)
+                .find(|t| t.title.as_deref() == Some(title))
+        });
         let by_language = remembered_language.as_ref().and_then(|_| {
             best_track(
                 tracks.iter().filter(same_language),
@@ -656,11 +725,12 @@ mod tests {
     fn choosing_sdh_remembers_the_flag() {
         let mut preference = remembered((None, None), (None, None), false);
         PreferenceChange::Subtitle(Some(track(2, Some("eng"), Some("English SDH"))))
-            .apply_to(&mut preference);
+            .apply_to(&mut preference, now());
         assert!(preference.subtitle_hearing_impaired);
-        PreferenceChange::Subtitle(Some(track(1, Some("eng"), None))).apply_to(&mut preference);
+        PreferenceChange::Subtitle(Some(track(1, Some("eng"), None)))
+            .apply_to(&mut preference, now());
         assert!(!preference.subtitle_hearing_impaired);
-        PreferenceChange::Subtitle(None).apply_to(&mut preference);
+        PreferenceChange::Subtitle(None).apply_to(&mut preference, now());
         assert!(!preference.subtitle_hearing_impaired);
     }
 
@@ -668,6 +738,48 @@ mod tests {
     fn no_track_in_the_preferred_language_leaves_the_file_default() {
         let tracks = [TrackInfo::subtitles_off(), track(1, Some("fre"), None)];
         assert_eq!(choose_subtitle_track(&tracks, None, "en"), None);
+    }
+
+    fn now() -> chrono::NaiveDateTime {
+        chrono::Utc::now().naive_utc()
+    }
+
+    #[test]
+    fn a_remembered_untitled_track_still_skips_forced_and_sdh() {
+        let tracks = [
+            TrackInfo::subtitles_off(),
+            flagged(track(1, Some("eng"), None), true, false),
+            track(2, Some("eng"), None),
+        ];
+        let full = remembered((None, None), (Some("eng"), None), false);
+        assert_eq!(choose_subtitle_track(&tracks, Some(&full), ""), Some(2));
+
+        let mut sdh = track(2, Some("eng"), None);
+        sdh.hearing_impaired = true;
+        let tracks = [TrackInfo::subtitles_off(), track(1, Some("eng"), None), sdh];
+        let mut chose_sdh = remembered((None, None), (Some("eng"), None), false);
+        chose_sdh.subtitle_hearing_impaired = true;
+        assert_eq!(
+            choose_subtitle_track(&tracks, Some(&chose_sdh), ""),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn only_track_choices_make_a_preference_the_show_latest() {
+        let mut preference = remembered((Some("eng"), None), (None, None), false);
+        let chosen_at = preference.updated_at;
+        let later = chosen_at + chrono::Duration::hours(1);
+
+        PreferenceChange::Delays {
+            audio_ms: 0,
+            subtitle_ms: 100,
+        }
+        .apply_to(&mut preference, later);
+        assert_eq!(preference.updated_at, chosen_at);
+
+        PreferenceChange::Audio(track(1, Some("ger"), None)).apply_to(&mut preference, later);
+        assert_eq!(preference.updated_at, later);
     }
 
     fn media_id(id: &str) -> MediaItemId {
@@ -683,7 +795,7 @@ mod tests {
             &media_id("ep2"),
             Some("show".to_string()),
         );
-        PreferenceChange::Audio(track(2, Some("jpn"), None)).apply_to(&mut preference);
+        PreferenceChange::Audio(track(2, Some("jpn"), None)).apply_to(&mut preference, now());
 
         assert_eq!(preference.media_id, "ep2");
         assert_eq!(preference.audio_language.as_deref(), Some("jpn"));
@@ -712,8 +824,8 @@ mod tests {
             audio_ms: 100,
             subtitle_ms: -50,
         }
-        .apply_to(&mut preference);
-        PreferenceChange::Audio(track(1, Some("ger"), None)).apply_to(&mut preference);
+        .apply_to(&mut preference, now());
+        PreferenceChange::Audio(track(1, Some("ger"), None)).apply_to(&mut preference, now());
         assert!(!preference.subtitle_off);
         assert_eq!(preference.subtitle_language.as_deref(), Some("eng"));
         assert_eq!(
@@ -721,12 +833,12 @@ mod tests {
             (100, -50)
         );
 
-        PreferenceChange::Subtitle(None).apply_to(&mut preference);
+        PreferenceChange::Subtitle(None).apply_to(&mut preference, now());
         assert!(preference.subtitle_off);
         assert_eq!(preference.subtitle_language, None);
 
         PreferenceChange::Subtitle(Some(track(3, Some("eng"), Some("SDH"))))
-            .apply_to(&mut preference);
+            .apply_to(&mut preference, now());
         assert!(!preference.subtitle_off);
         assert_eq!(preference.subtitle_title.as_deref(), Some("SDH"));
     }

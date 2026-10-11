@@ -262,20 +262,10 @@ impl Config {
             let config: Config =
                 toml::from_str(&contents).context("Failed to parse config file")?;
             info!("Config loaded successfully");
-            // Write settings the file doesn't have yet with their defaults, so
-            // the file shows what is in effect
-            let on_disk: toml::Value =
-                toml::from_str(&contents).context("Failed to parse config file")?;
-            if on_disk != toml::Value::try_from(&config).context("Failed to serialize config")? {
-                info!("Adding missing settings to the config file");
-                config.save()?;
-            }
             Ok(config)
         } else {
-            info!("No config file found, writing the defaults");
-            let config = Config::default();
-            config.save()?;
-            Ok(config)
+            info!("No config file found, using defaults");
+            Ok(Config::default())
         }
     }
 
@@ -289,7 +279,11 @@ impl Config {
 
         let contents = toml::to_string_pretty(self).context("Failed to serialize config")?;
 
-        fs::write(&config_path, contents).context("Failed to write config file")?;
+        // Write a temporary file and rename it over the config, so a load
+        // running at the same time never reads a half-written file
+        let temp_path = config_path.with_extension("toml.tmp");
+        fs::write(&temp_path, contents).context("Failed to write config file")?;
+        fs::rename(&temp_path, &config_path).context("Failed to replace config file")?;
 
         debug!("Config saved to {:?}", config_path);
         Ok(())
