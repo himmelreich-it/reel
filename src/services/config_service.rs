@@ -20,7 +20,8 @@ pub struct ConfigService {
 
 impl ConfigService {
     pub fn new() -> Self {
-        let config = Config::load().unwrap_or_default();
+        // Starting with defaults would overwrite the user's file on the next save
+        let config = Config::load().expect("Failed to load the configuration");
 
         Self {
             config: Arc::new(RwLock::new(config)),
@@ -156,13 +157,26 @@ impl ConfigService {
     }
 
     /// Change playback settings, saving and broadcasting only when something changed
+    ///
+    /// Holds the lock from reading to saving, so changes made in quick
+    /// succession can't overwrite each other.
     pub async fn update_playback(&self, change: impl FnOnce(&mut PlaybackConfig)) -> Result<()> {
-        let mut config = self.get_config().await;
-        let before = config.playback.clone();
-        change(&mut config.playback);
-        if config.playback != before {
-            self.update_config(config).await?;
-        }
+        let config = {
+            let mut current = self.config.write().await;
+            let before = current.playback.clone();
+            change(&mut current.playback);
+            if current.playback == before {
+                return Ok(());
+            }
+            current.save()?;
+            current.clone()
+        };
+
+        BROKER
+            .broadcast(BrokerMessage::Config(ConfigMessage::Updated {
+                config: Arc::new(config),
+            }))
+            .await;
         Ok(())
     }
 

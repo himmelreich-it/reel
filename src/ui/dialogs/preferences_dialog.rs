@@ -133,7 +133,10 @@ fn build_playback_page(
             .build(),
         color: gtk::ColorDialogButton::builder()
             .dialog(&gtk::ColorDialog::builder().with_alpha(false).build())
-            .rgba(&gtk::gdk::RGBA::parse(&playback.subtitle_color).unwrap_or(gtk::gdk::RGBA::WHITE))
+            .rgba(
+                &gtk::gdk::RGBA::parse(&playback.subtitle_color)
+                    .expect("subtitle colour is checked when the config is loaded"),
+            )
             .valign(gtk::Align::Center)
             .build(),
         border_size: adw::SpinRow::builder()

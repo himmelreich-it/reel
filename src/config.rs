@@ -68,18 +68,28 @@ pub struct PlaybackConfig {
     pub minimum_marker_duration_seconds: u32,
 
     /// ISO 639-1 code of the preferred audio language, empty for the file default
-    #[serde(default = "default_audio_language")]
+    #[serde(
+        default = "default_track_language",
+        deserialize_with = "deserialize_language_code"
+    )]
     pub preferred_audio_language: String,
 
-    /// ISO 639-1 code of the preferred subtitle language, empty for the file default
-    #[serde(default)]
+    /// ISO 639-1 code of the preferred subtitle language, empty for the file
+    /// default. A file without subtitles in this language keeps its default.
+    #[serde(
+        default = "default_track_language",
+        deserialize_with = "deserialize_language_code"
+    )]
     pub preferred_subtitle_language: String,
 
     #[serde(default = "default_subtitle_font_size")]
     pub subtitle_font_size: u32,
 
     /// Subtitle text colour as `#RRGGBB`
-    #[serde(default = "default_subtitle_color")]
+    #[serde(
+        default = "default_subtitle_color",
+        deserialize_with = "deserialize_rgb_color"
+    )]
     pub subtitle_color: String,
 
     #[serde(default = "default_subtitle_border_size")]
@@ -97,8 +107,42 @@ fn default_minimum_marker_duration() -> u32 {
     5
 }
 
-fn default_audio_language() -> String {
+// English audio and subtitles, as mpv's `alang`/`slang` of "eng,en" did before
+fn default_track_language() -> String {
     "en".to_string()
+}
+
+fn deserialize_language_code<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let code = String::deserialize(deserializer)?;
+    if code.is_empty() || crate::player::language::find(&code).is_some() {
+        Ok(code)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "unknown language code {:?}",
+            code
+        )))
+    }
+}
+
+fn deserialize_rgb_color<'de, D>(deserializer: D) -> std::result::Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let color = String::deserialize(deserializer)?;
+    let is_rgb = color.len() == 7
+        && color.starts_with('#')
+        && color[1..].chars().all(|c| c.is_ascii_hexdigit());
+    if is_rgb {
+        Ok(color)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "colour {:?} is not #RRGGBB",
+            color
+        )))
+    }
 }
 
 // mpv's defaults (0.38+), which are scaled to a 1080 line window
@@ -143,8 +187,8 @@ impl Default for PlaybackConfig {
             auto_skip_intro: false,
             auto_skip_credits: false,
             minimum_marker_duration_seconds: 5,
-            preferred_audio_language: default_audio_language(),
-            preferred_subtitle_language: String::new(),
+            preferred_audio_language: default_track_language(),
+            preferred_subtitle_language: default_track_language(),
             subtitle_font_size: default_subtitle_font_size(),
             subtitle_color: default_subtitle_color(),
             subtitle_border_size: default_subtitle_border_size(),
@@ -218,10 +262,20 @@ impl Config {
             let config: Config =
                 toml::from_str(&contents).context("Failed to parse config file")?;
             info!("Config loaded successfully");
+            // Write settings the file doesn't have yet with their defaults, so
+            // the file shows what is in effect
+            let on_disk: toml::Value =
+                toml::from_str(&contents).context("Failed to parse config file")?;
+            if on_disk != toml::Value::try_from(&config).context("Failed to serialize config")? {
+                info!("Adding missing settings to the config file");
+                config.save()?;
+            }
             Ok(config)
         } else {
-            info!("No config file found, using defaults");
-            Ok(Config::default())
+            info!("No config file found, writing the defaults");
+            let config = Config::default();
+            config.save()?;
+            Ok(config)
         }
     }
 
@@ -256,5 +310,38 @@ impl Config {
             let config_dir = dirs::config_dir().context("Failed to get config directory")?;
             Ok(config_dir.join("reel").join("config.toml"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn playback(toml_text: &str) -> std::result::Result<PlaybackConfig, toml::de::Error> {
+        toml::from_str(toml_text)
+    }
+
+    #[test]
+    fn english_audio_and_subtitles_by_default() {
+        let config = playback("").unwrap();
+        assert_eq!(config.preferred_audio_language, "en");
+        assert_eq!(config.preferred_subtitle_language, "en");
+        let defaults = PlaybackConfig::default();
+        assert_eq!(defaults.preferred_audio_language, "en");
+        assert_eq!(defaults.preferred_subtitle_language, "en");
+    }
+
+    #[test]
+    fn empty_language_means_the_file_default() {
+        let config = playback("preferred_subtitle_language = \"\"").unwrap();
+        assert_eq!(config.preferred_subtitle_language, "");
+    }
+
+    #[test]
+    fn rejects_unknown_languages_and_bad_colours() {
+        assert!(playback("preferred_audio_language = \"xx\"").is_err());
+        assert!(playback("subtitle_color = \"white\"").is_err());
+        assert!(playback("subtitle_color = \"#FFF\"").is_err());
+        assert!(playback("subtitle_color = \"#FFEE00\"").is_ok());
     }
 }
