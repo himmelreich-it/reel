@@ -15,6 +15,13 @@ impl TrackKind {
             TrackKind::Subtitle => "subtitle",
         }
     }
+
+    fn menu_heading(self) -> &'static str {
+        match self {
+            TrackKind::Audio => "Audio",
+            TrackKind::Subtitle => "Subtitles",
+        }
+    }
 }
 
 /// Menu population methods for audio/subtitle/zoom/quality menus
@@ -69,15 +76,18 @@ impl PlayerPage {
 
             // One stateful action makes the items radio buttons marking the playing track
             let action_name = format!("{}-track", kind.action_prefix());
-            let menu = gtk::gio::Menu::new();
+            let section = gtk::gio::Menu::new();
             for track in &tracks {
                 let item = gtk::gio::MenuItem::new(Some(&track.name), None);
                 item.set_action_and_target_value(
                     Some(&format!("player.{}", action_name)),
                     Some(&track.id.to_variant()),
                 );
-                menu.append_item(&item);
+                section.append_item(&item);
             }
+            // The section label heads the menu
+            let menu = gtk::gio::Menu::new();
+            menu.append_section(Some(kind.menu_heading()), &section);
 
             let action = gtk::gio::SimpleAction::new_stateful(
                 &action_name,

@@ -23,7 +23,9 @@ pub use types::{
 use crate::db::connection::DatabaseConnection;
 use crate::db::entities::MediaItemModel;
 use crate::models::LibraryId;
-use crate::ui::factories::media_card::{MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput};
+use crate::ui::factories::media_card::{
+    CardLayout, MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput,
+};
 use crate::ui::shared::broker::{BROKER, BrokerMessage};
 use crate::workers::{ImageLoader, ImageLoaderOutput};
 use std::collections::HashMap;
@@ -1103,6 +1105,8 @@ impl AsyncComponent for LibraryPage {
                             };
 
                             let index = factory_guard.push_back(MediaCardInit {
+                                layout: CardLayout::Overlay,
+                                subtitle: None,
                                 item: item.clone(),
                                 show_progress: progress_percent > 0.0,
                                 watched,

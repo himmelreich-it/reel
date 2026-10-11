@@ -77,7 +77,10 @@ pub struct PlayerPage {
     seek_bar_manager: SeekBarManager,
     // Volume management
     volume_manager: VolumeManager,
-    playlist_position_label: gtk::Label,
+    // Show name above the episode line, or empty for movies
+    title_eyebrow_label: gtk::Label,
+    // "S2 E4 · Episode title", or the movie title
+    title_label: gtk::Label,
     // Window reference for cursor management
     window: adw::ApplicationWindow,
     // Error handling and retry management
@@ -111,9 +114,8 @@ pub struct PlayerPage {
     // Zoom control state
     zoom_menu_button: gtk::MenuButton,
     current_zoom_mode: crate::player::ZoomMode,
-    zoom_label: gtk::Label,
-    // Control widgets for bounds detection
-    controls_overlay: Option<gtk::Box>,
+    // The pointer is over the top or bottom scrim
+    pointer_over_controls: bool,
     // Popover state tracking to prevent control hiding when popover is open
     active_popover_count: std::rc::Rc<std::cell::RefCell<usize>>,
     // Timing configuration
@@ -131,6 +133,8 @@ impl PlayerPage {
     // Configuration constants for control visibility behavior
     const DEFAULT_INACTIVITY_TIMEOUT_SECS: u64 = 3;
     const DEFAULT_MOUSE_MOVE_THRESHOLD: f64 = 5.0; // pixels
+    // The controls fade in and out over this many milliseconds
+    const CONTROLS_FADE_MS: u32 = 200;
 }
 
 impl std::fmt::Debug for PlayerPage {
@@ -178,6 +182,7 @@ pub enum PlayerInput {
         y: f64,
     },
     HideControls, // Triggered by inactivity timeout
+    PointerOverControls(bool),
     Previous,
     Next,
     StartSeeking,
@@ -216,6 +221,10 @@ pub enum PlayerInput {
     LoadedMarkers {
         intro: Option<ChapterMarker>,
         credits: Option<ChapterMarker>,
+    },
+    LoadedTitle {
+        eyebrow: String,
+        title: String,
     },
     // Message broker messages
     BrokerMsg(BrokerMessage),
@@ -295,6 +304,146 @@ mod tests {
     }
 }
 
+impl PlayerPage {
+    /// A drag that moves the window, unless it is fullscreen
+    fn window_drag_gesture(window: &adw::ApplicationWindow) -> gtk::GestureDrag {
+        let drag_gesture = gtk::GestureDrag::new();
+        let window = window.clone();
+        drag_gesture.connect_drag_begin(move |gesture, start_x, start_y| {
+            let Some(event) = gesture.current_event() else {
+                return;
+            };
+            if event.triggers_context_menu() {
+                return; // Don't drag on right-click
+            }
+            if !window.is_fullscreen()
+                && let Some(surface) = window.surface()
+            {
+                use gtk::gdk::prelude::ToplevelExt;
+                if let Some(toplevel) = surface.downcast_ref::<gtk::gdk::Toplevel>() {
+                    toplevel.begin_move(
+                        &event.device().unwrap(),
+                        gesture.current_button() as i32,
+                        start_x,
+                        start_y,
+                        event.time(),
+                    );
+                }
+            }
+        });
+        drag_gesture
+    }
+}
+
+impl PlayerPage {
+    /// Load the item's title and intro/credits markers, fetching markers from
+    /// the backend when the database has none
+    fn load_item_details(&self, id: &MediaItemId, sender: &AsyncComponentSender<Self>) {
+        let db_clone_for_markers = self.db.clone();
+        let media_id_for_markers = id.clone();
+        let sender_for_markers = sender.clone();
+        glib::spawn_future_local(async move {
+            use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
+            use crate::models::{MediaItem, MediaItemId};
+            use crate::services::core::backend::BackendService;
+
+            let media_repo = MediaRepositoryImpl::new(db_clone_for_markers.as_ref().clone());
+            if let Ok(Some(mut db_media)) =
+                media_repo.find_by_id(media_id_for_markers.as_ref()).await
+            {
+                // Check if markers are missing in database
+                let markers_missing = db_media.intro_marker_start_ms.is_none()
+                    && db_media.credits_marker_start_ms.is_none();
+
+                if markers_missing {
+                    // Fetch markers from backend
+                    let media_id_typed = MediaItemId::new(media_id_for_markers.to_string());
+                    match BackendService::fetch_markers(&db_clone_for_markers, &media_id_typed)
+                        .await
+                    {
+                        Ok((intro_marker, credits_marker)) => {
+                            // Store markers in database
+                            let intro_tuple =
+                                intro_marker.as_ref().map(|(start, end)| (*start, *end));
+                            let credits_tuple =
+                                credits_marker.as_ref().map(|(start, end)| (*start, *end));
+
+                            if let Err(e) = media_repo
+                                .update_markers(
+                                    media_id_for_markers.as_ref(),
+                                    intro_tuple,
+                                    credits_tuple,
+                                )
+                                .await
+                            {
+                                tracing::warn!("Failed to store markers in database: {}", e);
+                            } else {
+                                // Update local db_media with the new markers
+                                if let Some((start, end)) = intro_tuple {
+                                    db_media.intro_marker_start_ms = Some(start);
+                                    db_media.intro_marker_end_ms = Some(end);
+                                }
+                                if let Some((start, end)) = credits_tuple {
+                                    db_media.credits_marker_start_ms = Some(start);
+                                    db_media.credits_marker_end_ms = Some(end);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "Could not fetch markers from backend: {} (this is normal if markers aren't available)",
+                                e
+                            );
+                        }
+                    }
+                }
+
+                // Convert to domain model to get markers
+                if let Ok(media_item) = MediaItem::try_from(db_media) {
+                    match media_item {
+                        MediaItem::Movie(movie) => {
+                            sender_for_markers.input(PlayerInput::LoadedTitle {
+                                eyebrow: String::new(),
+                                title: movie.title.clone(),
+                            });
+                            sender_for_markers.input(PlayerInput::LoadedMarkers {
+                                intro: movie.intro_marker,
+                                credits: movie.credits_marker,
+                            });
+                        }
+                        MediaItem::Episode(episode) => {
+                            // Library sync doesn't store the show's name on its episodes
+                            let show_title = match (&episode.show_title, &episode.show_id) {
+                                (Some(title), _) => title.clone(),
+                                (None, Some(show_id)) => media_repo
+                                    .find_by_id(show_id)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .map(|show| show.title)
+                                    .unwrap_or_default(),
+                                (None, None) => String::new(),
+                            };
+                            sender_for_markers.input(PlayerInput::LoadedTitle {
+                                eyebrow: show_title,
+                                title: format!(
+                                    "S{} E{} · {}",
+                                    episode.season_number, episode.episode_number, episode.title
+                                ),
+                            });
+                            sender_for_markers.input(PlayerInput::LoadedMarkers {
+                                intro: episode.intro_marker,
+                                credits: episode.credits_marker,
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+    }
+}
+
 #[allow(unused_assignments)]
 #[relm4::component(pub async)]
 impl AsyncComponent for PlayerPage {
@@ -309,6 +458,7 @@ impl AsyncComponent for PlayerPage {
 
     view! {
         gtk::Overlay {
+            add_css_class: "player-page",
             set_vexpand: true,
             set_hexpand: true,
             set_focusable: true,
@@ -321,53 +471,6 @@ impl AsyncComponent for PlayerPage {
                 set_valign: gtk::Align::Fill,
                 set_halign: gtk::Align::Fill,
                 add_css_class: "video-area",
-            },
-
-            // Top left OSD controls (back button)
-            add_overlay = &gtk::Box {
-                set_halign: gtk::Align::Start,
-                set_valign: gtk::Align::Start,
-                set_margin_top: 12,
-                set_margin_start: 12,
-                add_css_class: "osd-overlay",
-                add_css_class: "controls-visible",
-                #[watch]
-                set_visible: model.controls_visible(),
-
-                gtk::Button {
-                    set_icon_name: "go-previous-symbolic",
-                    set_tooltip_text: Some("Back"),
-                    add_css_class: "osd",
-                    add_css_class: "circular",
-                    connect_clicked[sender] => move |_| {
-                        sender.input(PlayerInput::NavigateBack);
-                    },
-                },
-            },
-
-            // Top right OSD controls (fullscreen button)
-            add_overlay = &gtk::Box {
-                set_halign: gtk::Align::End,
-                set_valign: gtk::Align::Start,
-                set_margin_top: 12,
-                set_margin_end: 12,
-                add_css_class: "osd-overlay",
-                add_css_class: "controls-visible",
-                #[watch]
-                set_visible: model.controls_visible(),
-
-                gtk::Button {
-                    #[watch]
-                    set_icon_name: if model.is_fullscreen {
-                        "view-restore-symbolic"
-                    } else {
-                        "view-fullscreen-symbolic"
-                    },
-                    set_tooltip_text: Some("Toggle Fullscreen"),
-                    add_css_class: "osd",
-                    add_css_class: "circular",
-                    connect_clicked => PlayerInput::ToggleFullscreen,
-                },
             },
 
             // Error message overlay
@@ -427,15 +530,14 @@ impl AsyncComponent for PlayerPage {
             add_overlay = &gtk::Box {
                 set_halign: gtk::Align::End,
                 set_valign: gtk::Align::End,
-                set_margin_bottom: 140,
-                set_margin_end: 20,
+                set_margin_bottom: 200,
+                set_margin_end: 48,
                 #[watch]
                 set_visible: model.skip_marker_manager.is_skip_intro_visible(),
 
                 gtk::Button {
                     set_label: "Skip Intro",
-                    add_css_class: "osd",
-                    add_css_class: "pill",
+                    add_css_class: "player-skip-button",
                     connect_clicked => PlayerInput::SkipIntro,
                 },
             },
@@ -444,208 +546,242 @@ impl AsyncComponent for PlayerPage {
             add_overlay = &gtk::Box {
                 set_halign: gtk::Align::End,
                 set_valign: gtk::Align::End,
-                set_margin_bottom: 140,
-                set_margin_end: 20,
+                set_margin_bottom: 200,
+                set_margin_end: 48,
                 #[watch]
                 set_visible: model.skip_marker_manager.is_skip_credits_visible(),
 
                 gtk::Button {
                     set_label: "Skip Credits",
-                    add_css_class: "osd",
-                    add_css_class: "pill",
+                    add_css_class: "player-skip-button",
                     connect_clicked => PlayerInput::SkipCredits,
                 },
             },
 
-            // Bottom controls overlay with full control layout
-            add_overlay = &gtk::Box {
-                set_orientation: gtk::Orientation::Vertical,
-                set_halign: gtk::Align::Center,
+            // Top scrim with the back button. The top and bottom scrims fade
+            // in and out together; the video between them stays clickable.
+            add_overlay = &gtk::Revealer {
+                set_valign: gtk::Align::Start,
+                set_transition_type: gtk::RevealerTransitionType::Crossfade,
+                set_transition_duration: Self::CONTROLS_FADE_MS,
+                #[watch]
+                set_reveal_child: model.controls_visible() && !model.error_retry_manager.has_error(),
+
+                // Dragging the scrim moves the window; clicks reach the buttons
+                #[name = "top_scrim"]
+                gtk::WindowHandle {
+                    gtk::Box {
+                        add_css_class: "player-scrim-top",
+
+                        gtk::Button {
+                            set_icon_name: "go-previous-symbolic",
+                            set_tooltip_text: Some("Back"),
+                            add_css_class: "player-button",
+                            add_css_class: "raised",
+                            connect_clicked[sender] => move |_| {
+                                sender.input(PlayerInput::NavigateBack);
+                            },
+                        },
+                    },
+                },
+            },
+
+            // Bottom scrim: title, seek bar and controls
+            add_overlay = &gtk::Revealer {
                 set_valign: gtk::Align::End,
-                set_margin_all: 20,
-                set_width_request: 700,
+                set_transition_type: gtk::RevealerTransitionType::Crossfade,
+                set_transition_duration: Self::CONTROLS_FADE_MS,
                 #[watch]
-                set_visible: model.controls_visible() && !model.error_retry_manager.has_error(),
-                add_css_class: "osd",
-                add_css_class: "player-controls",
-                add_css_class: "minimal",
-                #[watch]
-                add_css_class: if model.controls_visible() { "fade-in" } else { "fade-out" },
+                set_reveal_child: model.controls_visible() && !model.error_retry_manager.has_error(),
 
-                // Playlist position indicator
-                model.playlist_position_label.clone() {
-                    add_css_class: "dim-label",
-                    set_margin_bottom: 4,
-                },
-
-                // Progress bar with time labels
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Horizontal,
-                    set_spacing: 8,
-                    set_margin_bottom: 8,
-
-                    model.seek_bar_manager.get_position_label().clone() {
-                        add_css_class: "dim-label",
-                        set_width_chars: 7,
-                    },
-
-                    model.seek_bar_manager.get_seek_bar().clone() {
-                        set_hexpand: true,
-                        set_draw_value: false,
-                        add_css_class: "progress-bar",
-                    },
-
-                    model.seek_bar_manager.get_duration_label().clone() {
-                        add_css_class: "dim-label",
-                        set_width_chars: 7,
-                    },
-                },
-
-                // Main controls row with three sections
-                gtk::Box {
-                    set_orientation: gtk::Orientation::Horizontal,
-                    set_spacing: 0,
-
-                    // Left section: Volume control
+                #[name = "bottom_scrim"]
+                gtk::WindowHandle {
                     gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_width_request: 150,
-                        set_halign: gtk::Align::Start,
-                        set_spacing: 4,
+                        set_orientation: gtk::Orientation::Vertical,
+                        set_spacing: 16,
+                        add_css_class: "player-scrim-bottom",
 
-                        gtk::Image {
-                            set_icon_name: Some("audio-volume-high-symbolic"),
-                            set_pixel_size: 16,
-                            add_css_class: "dim-label",
-                        },
-
-                        model.volume_manager.get_volume_slider().clone() {
-                            set_size_request: (100, -1),
-                            set_draw_value: false,
-                            add_css_class: "volume-slider",
-                            set_value: 1.0,
-                        },
-                    },
-
-                    // Center section: Playback controls
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_spacing: 4,
-                        set_halign: gtk::Align::Center,
-                        set_hexpand: true,
-
-                        // Previous track button
-                        gtk::Button {
-                            set_icon_name: "media-skip-backward-symbolic",
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Previous"),
-                            #[watch]
-                            set_sensitive: model.can_go_previous,
-                            connect_clicked => PlayerInput::Previous,
-                        },
-
-                        // Rewind button (seek backward 10s)
-                        gtk::Button {
-                            set_icon_name: "media-seek-backward-symbolic",
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Rewind 10 seconds"),
-                            connect_clicked => PlayerInput::Rewind,
-                        },
-
-                        // Play/pause button (center, compact)
+                        // Show name above "S2 E4 · Episode title", or the movie title
                         gtk::Box {
-                            set_size_request: (36, 36),
-                            set_halign: gtk::Align::Center,
-                            set_valign: gtk::Align::Center,
-                            add_css_class: "play-pause-container",
+                            set_orientation: gtk::Orientation::Vertical,
+                            set_spacing: 4,
 
-                            gtk::Button {
-                                #[watch]
-                                set_icon_name: if matches!(model.player_state, PlayerState::Playing) {
-                                    "media-playback-pause-symbolic"
-                                } else {
-                                    "media-playback-start-symbolic"
+                            model.title_eyebrow_label.clone() {
+                                set_xalign: 0.0,
+                                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                add_css_class: "player-title-eyebrow",
+                            },
+
+                            model.title_label.clone() {
+                                set_xalign: 0.0,
+                                set_ellipsize: gtk::pango::EllipsizeMode::End,
+                                add_css_class: "player-title",
+                            },
+                        },
+
+                        // Elapsed time, seek bar, remaining time
+                        gtk::Box {
+                            set_orientation: gtk::Orientation::Horizontal,
+                            set_spacing: 16,
+
+                            model.seek_bar_manager.get_position_label().clone() {
+                                set_width_request: 56,
+                                set_xalign: 0.0,
+                                add_css_class: "player-time",
+                            },
+
+                            model.seek_bar_manager.get_seek_widget().clone() {
+                                set_hexpand: true,
+                                set_valign: gtk::Align::Center,
+                            },
+
+                            model.seek_bar_manager.get_remaining_label().clone() {
+                                set_width_request: 56,
+                                set_xalign: 1.0,
+                                add_css_class: "player-time",
+                            },
+                        },
+
+                        gtk::CenterBox {
+                            // Mute and volume
+                            #[wrap(Some)]
+                            set_start_widget = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 8,
+
+                                gtk::Button {
+                                    #[watch]
+                                    set_icon_name: if model.volume_manager.is_muted() {
+                                        "audio-volume-muted-symbolic"
+                                    } else {
+                                        "audio-volume-high-symbolic"
+                                    },
+                                    #[watch]
+                                    set_tooltip_text: Some(if model.volume_manager.is_muted() {
+                                        "Unmute"
+                                    } else {
+                                        "Mute"
+                                    }),
+                                    add_css_class: "player-button",
+                                    connect_clicked => PlayerInput::ToggleMute,
                                 },
-                                add_css_class: "circular",
-                                add_css_class: "play-pause-button",
-                                set_can_shrink: false,
-                                connect_clicked => PlayerInput::PlayPause,
+
+                                model.volume_manager.get_volume_slider().clone() {
+                                    set_width_request: 96,
+                                    set_valign: gtk::Align::Center,
+                                    set_draw_value: false,
+                                    add_css_class: "player-volume-slider",
+                                },
                             },
-                        },
 
-                        // Forward button (seek forward 10s)
-                        gtk::Button {
-                            set_icon_name: "media-seek-forward-symbolic",
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Forward 10 seconds"),
-                            connect_clicked => PlayerInput::Forward,
-                        },
+                            // Playback controls
+                            #[wrap(Some)]
+                            set_center_widget = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 12,
+                                set_valign: gtk::Align::Center,
 
-                        // Next track button
-                        gtk::Button {
-                            set_icon_name: "media-skip-forward-symbolic",
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Next"),
-                            #[watch]
-                            set_sensitive: model.can_go_next,
-                            connect_clicked => PlayerInput::Next,
-                        },
-                    },
+                                gtk::Button {
+                                    set_icon_name: "media-skip-backward-symbolic",
+                                    set_tooltip_text: Some("Previous"),
+                                    add_css_class: "player-button",
+                                    #[watch]
+                                    set_sensitive: model.can_go_previous,
+                                    connect_clicked => PlayerInput::Previous,
+                                },
 
-                    // Right section: Track selection and fullscreen
-                    gtk::Box {
-                        set_orientation: gtk::Orientation::Horizontal,
-                        set_width_request: 150,
-                        set_halign: gtk::Align::End,
-                        set_spacing: 2,
+                                gtk::Button {
+                                    set_icon_name: "media-seek-backward-symbolic",
+                                    set_tooltip_text: Some("Back 10 seconds"),
+                                    add_css_class: "player-button",
+                                    connect_clicked => PlayerInput::Rewind,
+                                },
 
-                        // Audio tracks button
-                        model.audio_menu_button.clone() {
-                            set_icon_name: "audio-x-generic-symbolic",
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Audio Track"),
-                        },
+                                gtk::Button {
+                                    #[watch]
+                                    set_icon_name: if matches!(model.player_state, PlayerState::Playing) {
+                                        "media-playback-pause-symbolic"
+                                    } else {
+                                        "media-playback-start-symbolic"
+                                    },
+                                    #[watch]
+                                    set_tooltip_text: Some(if matches!(model.player_state, PlayerState::Playing) {
+                                        "Pause"
+                                    } else {
+                                        "Play"
+                                    }),
+                                    set_valign: gtk::Align::Center,
+                                    add_css_class: "player-play-button",
+                                    connect_clicked => PlayerInput::PlayPause,
+                                },
 
-                        // Subtitle tracks button
-                        model.subtitle_menu_button.clone() {
-                            set_icon_name: "media-view-subtitles-symbolic",
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Subtitles"),
-                        },
+                                gtk::Button {
+                                    set_icon_name: "media-seek-forward-symbolic",
+                                    set_tooltip_text: Some("Forward 10 seconds"),
+                                    add_css_class: "player-button",
+                                    connect_clicked => PlayerInput::Forward,
+                                },
 
-                        // Quality/Resolution button (hidden - doesn't work with current MPV embed)
-                        model.quality_menu_button.clone() {
-                            set_icon_name: "preferences-system-symbolic",
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Video Quality"),
-                            set_visible: false,
-                        },
-
-                        // Audio/subtitle sync button
-                        model.sync_menu_button.clone() {
-                            set_icon_name: "preferences-system-time-symbolic",
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Audio and Subtitle Sync"),
-                        },
-
-                        // Zoom button
-                        model.zoom_menu_button.clone() {
-                            set_icon_name: "zoom-in-symbolic",
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Video Zoom"),
-                        },
-
-                        // Fullscreen button
-                        gtk::Button {
-                            #[watch]
-                            set_icon_name: if model.is_fullscreen {
-                                "view-restore-symbolic"
-                            } else {
-                                "view-fullscreen-symbolic"
+                                gtk::Button {
+                                    set_icon_name: "media-skip-forward-symbolic",
+                                    set_tooltip_text: Some("Next"),
+                                    add_css_class: "player-button",
+                                    #[watch]
+                                    set_sensitive: model.can_go_next,
+                                    connect_clicked => PlayerInput::Next,
+                                },
                             },
-                            add_css_class: "flat",
-                            set_tooltip_text: Some("Fullscreen"),
-                            connect_clicked => PlayerInput::ToggleFullscreen,
+
+                            // Tracks, sync, zoom and fullscreen
+                            #[wrap(Some)]
+                            set_end_widget = &gtk::Box {
+                                set_orientation: gtk::Orientation::Horizontal,
+                                set_spacing: 4,
+
+                                model.audio_menu_button.clone() {
+                                    set_icon_name: "audio-x-generic-symbolic",
+                                    set_tooltip_text: Some("Audio Track"),
+                                    add_css_class: "player-button",
+                                },
+
+                                model.subtitle_menu_button.clone() {
+                                    set_icon_name: "media-view-subtitles-symbolic",
+                                    set_tooltip_text: Some("Subtitles"),
+                                    add_css_class: "player-button",
+                                },
+
+                                // Quality/Resolution button (hidden - doesn't work with current MPV embed)
+                                model.quality_menu_button.clone() {
+                                    set_icon_name: "preferences-system-symbolic",
+                                    set_tooltip_text: Some("Video Quality"),
+                                    add_css_class: "player-button",
+                                    set_visible: false,
+                                },
+
+                                model.sync_menu_button.clone() {
+                                    set_icon_name: "preferences-system-time-symbolic",
+                                    set_tooltip_text: Some("Audio and Subtitle Sync"),
+                                    add_css_class: "player-button",
+                                },
+
+                                model.zoom_menu_button.clone() {
+                                    set_icon_name: "zoom-in-symbolic",
+                                    set_tooltip_text: Some("Video Zoom"),
+                                    add_css_class: "player-button",
+                                },
+
+                                gtk::Button {
+                                    #[watch]
+                                    set_icon_name: if model.is_fullscreen {
+                                        "view-restore-symbolic"
+                                    } else {
+                                        "view-fullscreen-symbolic"
+                                    },
+                                    set_tooltip_text: Some("Fullscreen"),
+                                    add_css_class: "player-button",
+                                    connect_clicked => PlayerInput::ToggleFullscreen,
+                                },
+                            },
                         },
                     },
                 },
@@ -660,49 +796,13 @@ impl AsyncComponent for PlayerPage {
     ) -> AsyncComponentParts<Self> {
         let (media_item_id, db, window) = init;
 
-        // Load player CSS styles
-        let css_provider = gtk::CssProvider::new();
-        css_provider.load_from_string(include_str!("../../../styles/player.css"));
-        gtk::style_context_add_provider_for_display(
-            &gtk::gdk::Display::default().expect("Could not get default display"),
-            &css_provider,
-            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-        );
-
         // Create a container for the video widget that will be populated when player initializes
         let video_container = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
             .build();
 
-        // Add drag gesture to make the window draggable by clicking on the video area
-        let drag_gesture = gtk::GestureDrag::new();
-        let window_clone = window.clone();
-        drag_gesture.connect_drag_begin(move |gesture, start_x, start_y| {
-            // Only start drag if it's a primary button (left click) and not in fullscreen
-            if let Some(event) = gesture.current_event() {
-                if event.triggers_context_menu() {
-                    return; // Don't drag on right-click
-                }
-
-                // Get the surface and start the drag
-                if !window_clone.is_fullscreen()
-                    && let Some(surface) = window_clone.surface()
-                {
-                    // Check if surface implements Toplevel interface
-                    use gtk::gdk::prelude::ToplevelExt;
-                    if let Some(toplevel) = surface.downcast_ref::<gtk::gdk::Toplevel>() {
-                        toplevel.begin_move(
-                            &event.device().unwrap(),
-                            gesture.current_button() as i32,
-                            start_x,
-                            start_y,
-                            event.time(),
-                        );
-                    }
-                }
-            }
-        });
-        video_container.add_controller(drag_gesture);
+        // Dragging the video moves the window
+        video_container.add_controller(Self::window_drag_gesture(&window));
 
         // Add a placeholder initially
         let placeholder = gtk::Label::new(Some("Initializing player..."));
@@ -717,7 +817,8 @@ impl AsyncComponent for PlayerPage {
         // Create volume manager (handles widget and change handler setup)
         let volume_manager = VolumeManager::new(&sender);
 
-        let playlist_position_label = gtk::Label::new(None);
+        let title_eyebrow_label = gtk::Label::new(None);
+        let title_label = gtk::Label::new(None);
 
         // Create menu buttons for track selection
         let audio_menu_button = gtk::MenuButton::new();
@@ -727,7 +828,6 @@ impl AsyncComponent for PlayerPage {
         let active_popover_count = std::rc::Rc::new(std::cell::RefCell::new(0));
         let (sync_menu_button, audio_delay_label, subtitle_delay_label) =
             Self::build_sync_menu(&sender, active_popover_count.clone());
-        let zoom_label = gtk::Label::new(Some("Fit"));
 
         // Load config via the shared ConfigService so runtime updates stay in sync
         let config = CONFIG_SERVICE.get_config().await;
@@ -753,7 +853,8 @@ impl AsyncComponent for PlayerPage {
             window_event_debounce: None,
             seek_bar_manager,
             volume_manager,
-            playlist_position_label: playlist_position_label.clone(),
+            title_eyebrow_label,
+            title_label,
             window: window.clone(),
             error_retry_manager: ErrorRetryManager::new(3),
             progress_tracker: ProgressTracker::new(
@@ -786,8 +887,7 @@ impl AsyncComponent for PlayerPage {
             is_mpv_backend: Self::backend_prefers_mpv(&config.playback.player_backend),
             zoom_menu_button: zoom_menu_button.clone(),
             current_zoom_mode: crate::player::ZoomMode::default(),
-            zoom_label: zoom_label.clone(),
-            controls_overlay: None, // Will be set when controls are created
+            pointer_over_controls: false,
             active_popover_count,
             inactivity_timeout_secs: Self::DEFAULT_INACTIVITY_TIMEOUT_SECS,
             mouse_move_threshold: Self::DEFAULT_MOUSE_MOVE_THRESHOLD,
@@ -1084,6 +1184,20 @@ impl AsyncComponent for PlayerPage {
 
         let widgets = view_output!();
 
+        // The pointer over the scrims keeps the controls up
+        for scrim in [widgets.top_scrim.clone(), widgets.bottom_scrim.clone()] {
+            let motion = gtk::EventControllerMotion::new();
+            let enter_sender = sender.clone();
+            motion.connect_enter(move |_, _, _| {
+                enter_sender.input(PlayerInput::PointerOverControls(true));
+            });
+            let leave_sender = sender.clone();
+            motion.connect_leave(move |_| {
+                leave_sender.input(PlayerInput::PointerOverControls(false));
+            });
+            scrim.add_controller(motion);
+        }
+
         // Grab focus to ensure keyboard shortcuts work
         root.grab_focus();
 
@@ -1109,8 +1223,7 @@ impl AsyncComponent for PlayerPage {
                 // No navigation available for single items
                 self.can_go_previous = false;
                 self.can_go_next = false;
-                // Clear playlist position label
-                self.playlist_position_label.set_text("");
+                self.clear_title();
                 // Clear any existing error and reset retry state
                 self.error_retry_manager.clear_error();
                 // Reset auto-play state
@@ -1118,93 +1231,7 @@ impl AsyncComponent for PlayerPage {
                 // Clear skip button state
                 self.skip_marker_manager.clear_markers();
 
-                // Load marker data from database and fetch from backend if missing
-                let db_clone_for_markers = self.db.clone();
-                let media_id_for_markers = id.clone();
-                let sender_for_markers = sender.clone();
-                glib::spawn_future_local(async move {
-                    use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
-                    use crate::models::{MediaItem, MediaItemId};
-                    use crate::services::core::backend::BackendService;
-
-                    let media_repo =
-                        MediaRepositoryImpl::new(db_clone_for_markers.as_ref().clone());
-                    if let Ok(Some(mut db_media)) =
-                        media_repo.find_by_id(media_id_for_markers.as_ref()).await
-                    {
-                        // Check if markers are missing in database
-                        let markers_missing = db_media.intro_marker_start_ms.is_none()
-                            && db_media.credits_marker_start_ms.is_none();
-
-                        if markers_missing {
-                            // Fetch markers from backend
-                            let media_id_typed = MediaItemId::new(media_id_for_markers.to_string());
-                            match BackendService::fetch_markers(
-                                &db_clone_for_markers,
-                                &media_id_typed,
-                            )
-                            .await
-                            {
-                                Ok((intro_marker, credits_marker)) => {
-                                    // Store markers in database
-                                    let intro_tuple =
-                                        intro_marker.as_ref().map(|(start, end)| (*start, *end));
-                                    let credits_tuple =
-                                        credits_marker.as_ref().map(|(start, end)| (*start, *end));
-
-                                    if let Err(e) = media_repo
-                                        .update_markers(
-                                            media_id_for_markers.as_ref(),
-                                            intro_tuple,
-                                            credits_tuple,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            "Failed to store markers in database: {}",
-                                            e
-                                        );
-                                    } else {
-                                        // Update local db_media with the new markers
-                                        if let Some((start, end)) = intro_tuple {
-                                            db_media.intro_marker_start_ms = Some(start);
-                                            db_media.intro_marker_end_ms = Some(end);
-                                        }
-                                        if let Some((start, end)) = credits_tuple {
-                                            db_media.credits_marker_start_ms = Some(start);
-                                            db_media.credits_marker_end_ms = Some(end);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::debug!(
-                                        "Could not fetch markers from backend: {} (this is normal if markers aren't available)",
-                                        e
-                                    );
-                                }
-                            }
-                        }
-
-                        // Convert to domain model to get markers
-                        if let Ok(media_item) = MediaItem::try_from(db_media) {
-                            match media_item {
-                                MediaItem::Movie(movie) => {
-                                    sender_for_markers.input(PlayerInput::LoadedMarkers {
-                                        intro: movie.intro_marker,
-                                        credits: movie.credits_marker,
-                                    });
-                                }
-                                MediaItem::Episode(episode) => {
-                                    sender_for_markers.input(PlayerInput::LoadedMarkers {
-                                        intro: episode.intro_marker,
-                                        credits: episode.credits_marker,
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                });
+                self.load_item_details(&id, &sender);
 
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
@@ -1382,8 +1409,7 @@ impl AsyncComponent for PlayerPage {
                 self.can_go_previous = context.has_previous();
                 self.can_go_next = context.has_next();
 
-                // Update playlist position label
-                self.update_playlist_position_label(&context);
+                self.clear_title();
 
                 self.playlist_context = Some(context);
                 // Clear any existing error and reset retry state
@@ -1393,93 +1419,7 @@ impl AsyncComponent for PlayerPage {
                 // Clear skip button state
                 self.skip_marker_manager.clear_markers();
 
-                // Load marker data from database and fetch from backend if missing
-                let db_clone_for_markers = self.db.clone();
-                let media_id_for_markers = media_id.clone();
-                let sender_for_markers = sender.clone();
-                glib::spawn_future_local(async move {
-                    use crate::db::repository::{MediaRepository, MediaRepositoryImpl, Repository};
-                    use crate::models::{MediaItem, MediaItemId};
-                    use crate::services::core::backend::BackendService;
-
-                    let media_repo =
-                        MediaRepositoryImpl::new(db_clone_for_markers.as_ref().clone());
-                    if let Ok(Some(mut db_media)) =
-                        media_repo.find_by_id(media_id_for_markers.as_ref()).await
-                    {
-                        // Check if markers are missing in database
-                        let markers_missing = db_media.intro_marker_start_ms.is_none()
-                            && db_media.credits_marker_start_ms.is_none();
-
-                        if markers_missing {
-                            // Fetch markers from backend
-                            let media_id_typed = MediaItemId::new(media_id_for_markers.to_string());
-                            match BackendService::fetch_markers(
-                                &db_clone_for_markers,
-                                &media_id_typed,
-                            )
-                            .await
-                            {
-                                Ok((intro_marker, credits_marker)) => {
-                                    // Store markers in database
-                                    let intro_tuple =
-                                        intro_marker.as_ref().map(|(start, end)| (*start, *end));
-                                    let credits_tuple =
-                                        credits_marker.as_ref().map(|(start, end)| (*start, *end));
-
-                                    if let Err(e) = media_repo
-                                        .update_markers(
-                                            media_id_for_markers.as_ref(),
-                                            intro_tuple,
-                                            credits_tuple,
-                                        )
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            "Failed to store markers in database: {}",
-                                            e
-                                        );
-                                    } else {
-                                        // Update local db_media with the new markers
-                                        if let Some((start, end)) = intro_tuple {
-                                            db_media.intro_marker_start_ms = Some(start);
-                                            db_media.intro_marker_end_ms = Some(end);
-                                        }
-                                        if let Some((start, end)) = credits_tuple {
-                                            db_media.credits_marker_start_ms = Some(start);
-                                            db_media.credits_marker_end_ms = Some(end);
-                                        }
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::debug!(
-                                        "Could not fetch markers from backend: {} (this is normal if markers aren't available)",
-                                        e
-                                    );
-                                }
-                            }
-                        }
-
-                        // Convert to domain model to get markers
-                        if let Ok(media_item) = MediaItem::try_from(db_media) {
-                            match media_item {
-                                MediaItem::Movie(movie) => {
-                                    sender_for_markers.input(PlayerInput::LoadedMarkers {
-                                        intro: movie.intro_marker,
-                                        credits: movie.credits_marker,
-                                    });
-                                }
-                                MediaItem::Episode(episode) => {
-                                    sender_for_markers.input(PlayerInput::LoadedMarkers {
-                                        intro: episode.intro_marker,
-                                        credits: episode.credits_marker,
-                                    });
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                });
+                self.load_item_details(&media_id, &sender);
 
                 // Get actual media URL from backend using GetStreamUrlCommand
                 let db_clone = self.db.clone();
@@ -1800,8 +1740,10 @@ impl AsyncComponent for PlayerPage {
                     return;
                 }
 
-                // Process immediately - hide when leaving window (unless popover is open)
-                self.transition_to_hidden(sender.clone(), false);
+                // Hide when leaving the window, unless paused
+                if self.player_state != PlayerState::Paused {
+                    self.transition_to_hidden(sender.clone());
+                }
             }
             PlayerInput::MouseMove { x, y } => {
                 // Check if movement exceeds threshold
@@ -1810,7 +1752,7 @@ impl AsyncComponent for PlayerPage {
                     self.last_mouse_position = Some((x, y));
 
                     // Check if mouse is over controls
-                    let over_controls = self.is_mouse_over_controls(x, y);
+                    let over_controls = self.pointer_over_controls;
 
                     // Handle state transitions based on current state and mouse position
                     match &self.control_state {
@@ -1838,10 +1780,30 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::HideControls => {
-                // Called by inactivity timer
-                if matches!(self.control_state, ControlState::Visible { .. }) {
-                    // Only hide if we're in Visible state (not Hovering)
-                    self.transition_to_hidden(sender.clone(), true);
+                // Called by the inactivity timer, which is gone once it fired:
+                // forget it so nothing tries to remove it again
+                let ControlState::Visible { timer_id } = &mut self.control_state else {
+                    // Hovering over the controls keeps them up
+                    return;
+                };
+                timer_id.take();
+                if self.player_state == PlayerState::Paused {
+                    // Controls stay up while paused; the restarted timer checks again
+                    self.transition_to_visible(sender.clone());
+                } else {
+                    self.transition_to_hidden(sender.clone());
+                }
+            }
+            PlayerInput::PointerOverControls(over) => {
+                self.pointer_over_controls = over;
+                match self.control_state {
+                    ControlState::Visible { .. } if over => {
+                        self.transition_to_hovering(sender.clone());
+                    }
+                    ControlState::Hovering if !over => {
+                        self.transition_to_visible(sender.clone());
+                    }
+                    _ => {}
                 }
             }
             PlayerInput::Previous => {
@@ -1962,7 +1924,7 @@ impl AsyncComponent for PlayerPage {
                 }
             }
             PlayerInput::ToggleMute => {
-                // Toggle mute state
+                self.volume_manager.toggle_muted();
                 if let Some(player) = &self.player {
                     let player_handle = player.clone();
                     sender.oneshot_command(async move {
@@ -2064,7 +2026,7 @@ impl AsyncComponent for PlayerPage {
                         self.transition_to_visible(sender.clone());
                     }
                     _ => {
-                        self.transition_to_hidden(sender.clone(), false);
+                        self.transition_to_hidden(sender.clone());
                     }
                 }
             }
@@ -2085,9 +2047,16 @@ impl AsyncComponent for PlayerPage {
                 self.skip_marker_manager.skip_credits(&sender);
             }
             PlayerInput::LoadedMarkers { intro, credits } => {
+                self.seek_bar_manager
+                    .set_markers(intro.as_ref(), credits.as_ref());
                 self.skip_marker_manager.load_markers(intro, credits);
                 // Trigger visibility check
                 sender.input(PlayerInput::UpdateSkipButtonsVisibility);
+            }
+            PlayerInput::LoadedTitle { eyebrow, title } => {
+                self.title_eyebrow_label.set_visible(!eyebrow.is_empty());
+                self.title_eyebrow_label.set_text(&eyebrow);
+                self.title_label.set_text(&title);
             }
             PlayerInput::BrokerMsg(msg) => {
                 match msg {
@@ -2193,8 +2162,6 @@ impl AsyncComponent for PlayerPage {
                     });
                     // Update menu to reflect new selection
                     self.populate_zoom_menu(sender.clone());
-                    // Update zoom label
-                    self.zoom_label.set_text(&mode.to_string());
                 }
             }
             PlayerInput::CycleZoom => {
@@ -2352,6 +2319,11 @@ impl AsyncComponent for PlayerPage {
                 duration,
                 state,
             } => {
+                // Duration first, so the remaining time uses the current one
+                if let Some(dur) = duration {
+                    self.duration = dur;
+                    self.seek_bar_manager.update_duration(dur);
+                }
                 if let Some(pos) = position {
                     self.position = pos;
                     // Update position label and seek bar (only if not being dragged)
@@ -2399,11 +2371,6 @@ impl AsyncComponent for PlayerPage {
                             });
                         }
                     }
-                }
-                if let Some(dur) = duration {
-                    self.duration = dur;
-                    // Update duration label and seek bar range
-                    self.seek_bar_manager.update_duration(dur);
                 }
                 self.player_state = state;
             }

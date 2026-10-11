@@ -10,6 +10,7 @@ use super::{PlayerInput, PlayerPage};
 pub struct VolumeManager {
     volume_slider: gtk::Scale,
     volume: f64,
+    muted: bool,
 }
 
 impl VolumeManager {
@@ -32,6 +33,7 @@ impl VolumeManager {
         Self {
             volume_slider,
             volume: 1.0,
+            muted: false,
         }
     }
 
@@ -43,6 +45,16 @@ impl VolumeManager {
     /// Get current volume level (0.0 - 1.0)
     pub fn get_volume(&self) -> f64 {
         self.volume
+    }
+
+    /// Whether the player is muted
+    pub fn is_muted(&self) -> bool {
+        self.muted
+    }
+
+    /// Flip the mute state, as the player's mute toggle does
+    pub fn toggle_muted(&mut self) {
+        self.muted = !self.muted;
     }
 
     /// Set volume level (0.0 - 1.0)

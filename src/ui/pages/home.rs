@@ -1,4 +1,5 @@
-use gtk::prelude::*;
+use adw::prelude::*;
+use libadwaita as adw;
 use relm4::factory::FactoryVecDeque;
 use relm4::gtk;
 use relm4::prelude::*;
@@ -12,7 +13,9 @@ use crate::db::repository::{
     home_section_repository::{HomeSectionRepository, HomeSectionRepositoryImpl},
 };
 use crate::models::{HomeSectionType, HomeSectionWithModels, MediaItemId, SourceId};
-use crate::ui::factories::media_card::{MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput};
+use crate::ui::factories::media_card::{
+    CardLayout, MediaCard, MediaCardInit, MediaCardInput, MediaCardOutput,
+};
 use crate::ui::shared::broker::{BROKER, BrokerMessage};
 use crate::workers::{ImageLoader, ImageLoaderInput, ImageLoaderOutput, ImageRequest, ImageSize};
 
@@ -35,7 +38,21 @@ pub struct HomePage {
     loading_containers: HashMap<SourceId, gtk::Box>,    // UI containers for loading/error states
     section_ui_containers: HashMap<String, gtk::Box>, // Track actual section UI containers by section_id
     load_in_progress: bool, // Track if a LoadData operation is currently in progress
+    // The featured item at the top and the source it came from
+    hero: Option<Hero>,
 }
+
+/// The featured "On Deck" item at the top of the page
+struct Hero {
+    source_id: SourceId,
+    // Image request id of its backdrop
+    image_id: String,
+    root: gtk::Overlay,
+    backdrop: gtk::Picture,
+}
+
+/// Prefix of image requests for the hero's backdrop
+const HERO_IMAGE_PREFIX: &str = "hero::";
 
 impl std::fmt::Debug for HomePage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -62,6 +79,8 @@ pub enum HomePageInput {
     RetrySource(SourceId),
     /// Media item selected
     MediaItemSelected(MediaItemId),
+    /// Show the details of the hero's item (its show, for an episode)
+    HeroDetails(MediaItemId),
     /// Mark media item as watched
     MarkWatched(MediaItemId),
     /// Mark media item as unwatched
@@ -105,8 +124,11 @@ impl AsyncComponent for HomePage {
                 #[local_ref]
                 sections_container -> gtk::Box {
                     set_orientation: gtk::Orientation::Vertical,
-                    set_margin_all: 24,
-                    set_spacing: 48,
+                    set_margin_top: 20,
+                    set_margin_bottom: 32,
+                    set_margin_start: 32,
+                    set_margin_end: 32,
+                    set_spacing: 36,
 
                     // Loading indicator
                     gtk::Box {
@@ -164,7 +186,7 @@ impl AsyncComponent for HomePage {
     ) -> AsyncComponentParts<Self> {
         let sections_container = gtk::Box::builder()
             .orientation(gtk::Orientation::Vertical)
-            .spacing(48)
+            .spacing(36)
             .build();
 
         // Create the image loader worker
@@ -193,6 +215,7 @@ impl AsyncComponent for HomePage {
             loading_containers: HashMap::new(),
             section_ui_containers: HashMap::new(),
             load_in_progress: false,
+            hero: None,
         };
 
         let widgets = view_output!();
@@ -437,6 +460,12 @@ impl AsyncComponent for HomePage {
                     .unwrap();
             }
 
+            HomePageInput::HeroDetails(item_id) => {
+                sender
+                    .output(HomePageOutput::NavigateToMediaItem(item_id))
+                    .unwrap();
+            }
+
             HomePageInput::MarkWatched(media_id) => {
                 debug!("Marking item as watched: {}", media_id);
                 let db = self.db.clone();
@@ -483,6 +512,13 @@ impl AsyncComponent for HomePage {
 
             HomePageInput::ImageLoaded { id, texture } => {
                 trace!("Image loaded for item: {}", id);
+                if id.starts_with(HERO_IMAGE_PREFIX) {
+                    // A backdrop for an earlier featured item is dropped
+                    if let Some(hero) = self.hero.as_ref().filter(|hero| hero.image_id == id) {
+                        hero.backdrop.set_paintable(Some(&texture));
+                    }
+                    return;
+                }
                 // Find the section and card index for this image
                 if let Some((section_id, card_idx)) = self.image_requests.get(&id)
                     && let Some(factory) = self.section_factories.get(section_id)
@@ -715,6 +751,33 @@ impl HomePage {
             }
         }
 
+        // Feature the first On Deck item, or else the first one to continue watching
+        if self.hero.is_none() {
+            let featured = non_empty_sections
+                .iter()
+                .find(|section| matches!(section.section_type, HomeSectionType::OnDeck))
+                .or_else(|| {
+                    non_empty_sections.iter().find(|section| {
+                        matches!(section.section_type, HomeSectionType::ContinueWatching)
+                    })
+                })
+                .and_then(|section| Some((section.title.clone(), section.items.first()?)));
+            if let Some((section_title, item)) = featured {
+                let parent_show = item
+                    .parent_id
+                    .as_ref()
+                    .and_then(|parent_id| parent_shows_map.get(parent_id));
+                self.show_hero(
+                    source_id,
+                    &section_title,
+                    item,
+                    parent_show,
+                    playback_progress_map.get(&item.id),
+                    sender,
+                );
+            }
+        }
+
         // Add only non-empty sections to our list
         self.sections.extend(non_empty_sections.clone());
 
@@ -767,22 +830,35 @@ impl HomePage {
             header_box.append(&scroll_right_button);
             section_box.append(&header_box);
 
-            // Scrollable content area with horizontal scrolling
+            // Items to continue are stills; everything else is posters
+            let layout = if matches!(section.section_type, HomeSectionType::ContinueWatching) {
+                CardLayout::Landscape
+            } else {
+                CardLayout::Poster
+            };
+
+            // Scrollable content area with horizontal scrolling; as tall as its cards
             let scrolled_window = gtk::ScrolledWindow::builder()
                 .hscrollbar_policy(gtk::PolicyType::Automatic)
                 .vscrollbar_policy(gtk::PolicyType::Never)
                 .overlay_scrolling(true)
-                .height_request(290) // Fixed height for media cards + margin
                 .build();
 
             // Use FlowBox configured for horizontal scrolling
             let cards_box = gtk::FlowBox::builder()
                 .orientation(gtk::Orientation::Horizontal)
-                .column_spacing(12)
+                .column_spacing(if layout == CardLayout::Landscape {
+                    24
+                } else {
+                    16
+                })
                 .min_children_per_line(section.items.len() as u32) // Set to actual number of items
                 .max_children_per_line(section.items.len() as u32) // Force single row with all items
                 .selection_mode(gtk::SelectionMode::None)
                 .valign(gtk::Align::Start)
+                // Cards keep their size; a short row doesn't stretch them
+                .halign(gtk::Align::Start)
+                .css_classes(["home-row"])
                 .homogeneous(false)
                 .build();
 
@@ -810,16 +886,36 @@ impl HomePage {
                         matches!(section.section_type, HomeSectionType::ContinueWatching);
 
                     // Use the pre-fetched playback progress data
-                    let (watched, progress_percent) =
-                        if let Some(progress) = playback_progress_map.get(&model.id) {
-                            (progress.watched, progress.get_progress_percentage() as f64)
-                        } else {
-                            (false, 0.0) // No progress record means unwatched
-                        };
+                    let progress = playback_progress_map.get(&model.id);
+                    let (watched, progress_percent) = if let Some(progress) = progress {
+                        (progress.watched, progress.get_progress_percentage() as f64)
+                    } else {
+                        (false, 0.0) // No progress record means unwatched
+                    };
 
-                    // For episodes, we want to show the show poster instead
+                    // A still from the episode or the movie's backdrop, captioned
+                    // "S2 E3 · 22 min left"
+                    let mut subtitle = None;
                     let mut display_item = model.clone();
-                    if model.media_type == "episode" {
+                    if layout == CardLayout::Landscape {
+                        if model.media_type == "movie" {
+                            display_item.poster_url = model.backdrop_url.clone();
+                        }
+                        if let Some(show) = model
+                            .parent_id
+                            .as_ref()
+                            .and_then(|parent_id| parent_shows_map.get(parent_id))
+                        {
+                            display_item.title = show.title.clone();
+                        }
+                        subtitle = Some(
+                            [episode_label(model), progress.and_then(time_left)]
+                                .into_iter()
+                                .flatten()
+                                .collect::<Vec<_>>()
+                                .join(" · "),
+                        );
+                    } else if model.media_type == "episode" {
                         // Check if we have the parent show data
                         if let Some(parent_id) = &model.parent_id {
                             if let Some(parent_show) = parent_shows_map.get(parent_id) {
@@ -874,6 +970,8 @@ impl HomePage {
 
                     guard.push_back(MediaCardInit {
                         item: display_item,
+                        layout,
+                        subtitle,
                         show_progress,
                         watched,
                         progress_percent,
@@ -903,7 +1001,11 @@ impl HomePage {
                             ImageRequest {
                                 id: tracking_key, // Use the unique tracking key as the ID
                                 url: poster_url.clone(),
-                                size: ImageSize::Thumbnail,
+                                size: if layout == CardLayout::Landscape {
+                                    ImageSize::Custom(320, 180)
+                                } else {
+                                    ImageSize::Thumbnail
+                                },
                                 priority,
                             },
                         ));
@@ -1049,6 +1151,7 @@ impl HomePage {
 
         // Clear sections data
         self.sections.clear();
+        self.hero = None;
     }
 
     /// Clear sections for a specific source
@@ -1094,5 +1197,165 @@ impl HomePage {
         // Remove sections from data
         self.sections
             .retain(|section| !section.id.starts_with(&format!("{}::", source_id)));
+
+        if self
+            .hero
+            .as_ref()
+            .is_some_and(|hero| &hero.source_id == source_id)
+            && let Some(hero) = self.hero.take()
+        {
+            self.sections_container.remove(&hero.root);
+        }
     }
+
+    /// Feature an item at the top: its backdrop, title, progress, and
+    /// buttons to resume and to open its details
+    fn show_hero(
+        &mut self,
+        source_id: &SourceId,
+        section_title: &str,
+        item: &MediaItemModel,
+        parent_show: Option<&MediaItemModel>,
+        progress: Option<&crate::db::entities::PlaybackProgressModel>,
+        sender: &AsyncComponentSender<Self>,
+    ) {
+        let backdrop = gtk::Picture::builder()
+            .content_fit(gtk::ContentFit::Cover)
+            .can_shrink(true)
+            .build();
+        let root = gtk::Overlay::builder()
+            .height_request(320)
+            .overflow(gtk::Overflow::Hidden)
+            .css_classes(["home-hero"])
+            .child(&backdrop)
+            .build();
+        root.add_overlay(
+            &gtk::Box::builder()
+                .css_classes(["home-hero-gradient"])
+                .can_target(false)
+                .build(),
+        );
+
+        let content = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(10)
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::End)
+            .margin_start(36)
+            .margin_bottom(32)
+            .width_request(460)
+            .build();
+        let label = |text: &str, class: &str| {
+            gtk::Label::builder()
+                .label(text)
+                .xalign(0.0)
+                .ellipsize(gtk::pango::EllipsizeMode::End)
+                .css_classes([class])
+                .build()
+        };
+        content.append(&label(section_title, "home-hero-eyebrow"));
+        let title = parent_show.map_or(&item.title, |show| &show.title);
+        content.append(&label(title, "home-hero-title"));
+        if parent_show.is_some() {
+            let episode_line = [episode_label(item), Some(item.title.clone())]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+            content.append(&label(&episode_line, "home-hero-subtitle"));
+        }
+
+        if let Some(progress) = progress.filter(|progress| progress.is_in_progress()) {
+            let progress_row = gtk::Box::builder().spacing(12).build();
+            progress_row.append(
+                &gtk::ProgressBar::builder()
+                    .fraction(progress.get_progress_percentage() as f64)
+                    .width_request(220)
+                    .valign(gtk::Align::Center)
+                    .css_classes(["home-hero-progress"])
+                    .build(),
+            );
+            if let Some(left) = time_left(progress) {
+                progress_row.append(&label(&left, "home-hero-time"));
+            }
+            content.append(&progress_row);
+        }
+
+        let buttons = gtk::Box::builder().spacing(12).margin_top(6).build();
+        let resume = gtk::Button::builder()
+            .css_classes(["pill", "suggested-action"])
+            .child(
+                &adw::ButtonContent::builder()
+                    .icon_name("media-playback-start-symbolic")
+                    .label(if progress.is_some_and(|p| p.is_in_progress()) {
+                        "Resume"
+                    } else {
+                        "Play"
+                    })
+                    .build(),
+            )
+            .build();
+        let item_id = MediaItemId::new(item.id.clone());
+        let resume_sender = sender.clone();
+        resume.connect_clicked(move |_| {
+            resume_sender.input(HomePageInput::MediaItemSelected(item_id.clone()));
+        });
+        buttons.append(&resume);
+
+        let details = gtk::Button::builder()
+            .label("Details")
+            .css_classes(["pill", "home-hero-secondary"])
+            .build();
+        let details_id = MediaItemId::new(parent_show.map_or(&item.id, |show| &show.id).clone());
+        let details_sender = sender.clone();
+        details.connect_clicked(move |_| {
+            details_sender.input(HomePageInput::HeroDetails(details_id.clone()));
+        });
+        buttons.append(&details);
+        content.append(&buttons);
+        root.add_overlay(&content);
+
+        // An episode shows its show's backdrop
+        let backdrop_url = parent_show
+            .and_then(|show| show.backdrop_url.clone())
+            .or_else(|| item.backdrop_url.clone())
+            .filter(|url| !url.is_empty());
+        let image_id = format!("{}{}", HERO_IMAGE_PREFIX, item.id);
+        if let Some(url) = backdrop_url {
+            let _ = self
+                .image_loader
+                .sender()
+                .send(ImageLoaderInput::LoadImage(ImageRequest {
+                    id: image_id.clone(),
+                    url,
+                    size: ImageSize::Custom(1600, 900),
+                    priority: 0,
+                }));
+        }
+
+        self.sections_container.prepend(&root);
+        self.hero = Some(Hero {
+            source_id: source_id.clone(),
+            image_id,
+            root,
+            backdrop,
+        });
+    }
+}
+
+/// "S2 E4" for an episode
+fn episode_label(item: &MediaItemModel) -> Option<String> {
+    match (item.season_number, item.episode_number) {
+        (Some(season), Some(episode)) => Some(format!("S{} E{}", season, episode)),
+        _ => None,
+    }
+}
+
+/// "22 min left" for an item that was started
+fn time_left(progress: &crate::db::entities::PlaybackProgressModel) -> Option<String> {
+    if !progress.is_in_progress() || progress.duration_ms <= 0 {
+        return None;
+    }
+    let minutes = ((progress.duration_ms - progress.position_ms).max(0) as f64 / 60_000.0).ceil();
+    Some(format!("{} min left", minutes as i64))
 }

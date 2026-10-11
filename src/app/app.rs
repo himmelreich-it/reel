@@ -35,9 +35,10 @@ impl ReelApp {
         let base_css = include_str!("../styles/base.css");
         let details_css = include_str!("../styles/details.css");
         let sidebar_css = include_str!("../styles/sidebar.css");
+        let player_css = include_str!("../styles/player.css");
 
         tracing::info!("Loading standard CSS styles");
-        let combined_css = format!("{}{}{}", base_css, details_css, sidebar_css);
+        let combined_css = format!("{}{}{}{}", base_css, details_css, sidebar_css, player_css);
         relm4::set_global_css(&combined_css);
 
         // Initialize database in a blocking context first

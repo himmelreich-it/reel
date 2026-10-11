@@ -7,14 +7,9 @@
                  0 1px 3px rgba(0, 0, 0, 0.9);
 }
 .title-2 {
-    font-size: 24pt;
+    font-size: 20px;
     font-weight: 700;
     line-height: 1.2;
-    color: rgba(255, 255, 255, 0.7);
-    font-size: 14px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
 }
 .title-3 {
     font-size: 18pt;
@@ -473,4 +468,121 @@ statuspage > box {
 .connection-status-badge image {
     color: white;
     -gtk-icon-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+/* Cards with the title below the image (Home) */
+.poster-card.captioned {
+    min-width: 0;
+    min-height: 0;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+}
+
+.poster-card.captioned:hover {
+    transform: none;
+    box-shadow: none;
+}
+
+.poster-card.captioned .poster-overlay,
+.poster-card.captioned .rounded-poster {
+    min-width: 0;
+    min-height: 0;
+    border-radius: 10px;
+}
+
+.poster-card.captioned:hover .poster-overlay {
+    box-shadow: 0 0 0 2px alpha(white, 0.6);
+}
+
+.media-card-title {
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.media-card-subtitle {
+    font-size: 13px;
+    font-weight: normal;
+    color: alpha(white, 0.62);
+}
+
+/* Featured item at the top of Home */
+.home-hero {
+    border-radius: 16px;
+    background-color: #3b4652;
+}
+
+.home-hero-gradient {
+    background-image: linear-gradient(
+        to right,
+        rgba(0, 0, 0, 0.82) 0%,
+        rgba(0, 0, 0, 0.5) 45%,
+        rgba(0, 0, 0, 0) 75%
+    );
+}
+
+.home-hero-eyebrow {
+    font-size: 13px;
+    font-weight: 600;
+    color: @accent_color;
+}
+
+.home-hero-title {
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: white;
+}
+
+.home-hero-subtitle {
+    font-size: 16px;
+    color: alpha(white, 0.85);
+}
+
+.home-hero-time {
+    font-size: 13px;
+    color: alpha(white, 0.8);
+}
+
+.home-hero-progress trough {
+    min-height: 4px;
+    border-radius: 2px;
+    background-color: alpha(white, 0.25);
+}
+
+.home-hero-progress progress {
+    min-height: 4px;
+    border-radius: 2px;
+    background-color: @accent_bg_color;
+}
+
+.home-hero-secondary {
+    background-color: alpha(white, 0.16);
+    color: white;
+}
+
+.home-hero-secondary:hover {
+    background-color: alpha(white, 0.24);
+}
+
+/* Home rows size to their cards */
+.home-row > flowboxchild {
+    min-width: 0;
+    min-height: 0;
+}
+
+/* Subtitle style preview in preferences */
+.subtitle-preview {
+    border-radius: 12px;
+    background-image: radial-gradient(
+        ellipse at 60% 30%,
+        #34404b 0%,
+        #161c22 70%,
+        #0b0e11 100%
+    );
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+
+.subtitle-preview-text {
+    font-weight: 600;
+    border-radius: 4px;
 }

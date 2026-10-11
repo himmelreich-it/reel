@@ -1,4 +1,5 @@
-use crate::models::PlaylistContext;
+use gtk::prelude::*;
+use relm4::gtk;
 use relm4::prelude::*;
 use tracing::debug;
 
@@ -6,46 +7,11 @@ use super::{PlayerInput, PlayerPage};
 
 /// Playlist navigation and position tracking methods
 impl PlayerPage {
-    /// Update the playlist position label based on current context
-    pub(super) fn update_playlist_position_label(&self, context: &PlaylistContext) {
-        match context {
-            PlaylistContext::SingleItem => {
-                self.playlist_position_label.set_text("");
-            }
-            PlaylistContext::TvShow {
-                show_title,
-                current_index,
-                episodes,
-                ..
-            } => {
-                if let Some(current_episode) = episodes.get(*current_index) {
-                    let text = format!(
-                        "{} - S{}E{} - Episode {} of {}",
-                        show_title,
-                        current_episode.season_number,
-                        current_episode.episode_number,
-                        current_index + 1,
-                        episodes.len()
-                    );
-                    self.playlist_position_label.set_text(&text);
-                }
-            }
-            PlaylistContext::PlayQueue {
-                current_index,
-                items,
-                ..
-            } => {
-                if let Some(current_item) = items.get(*current_index) {
-                    let text = format!(
-                        "{} - Item {} of {}",
-                        current_item.title,
-                        current_index + 1,
-                        items.len()
-                    );
-                    self.playlist_position_label.set_text(&text);
-                }
-            }
-        }
+    /// Empty the title until the new item's details are loaded
+    pub(super) fn clear_title(&self) {
+        self.title_eyebrow_label.set_visible(false);
+        self.title_eyebrow_label.set_text("");
+        self.title_label.set_text("");
     }
 
     /// Handle previous episode/item navigation

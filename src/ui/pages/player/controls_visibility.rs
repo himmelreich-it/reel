@@ -20,19 +20,13 @@ pub(super) enum ControlState {
 /// Control visibility state machine implementation
 impl PlayerPage {
     /// Transition to the Hidden state
-    pub(super) fn transition_to_hidden(
-        &mut self,
-        _sender: AsyncComponentSender<Self>,
-        from_timer: bool,
-    ) {
+    pub(super) fn transition_to_hidden(&mut self, _sender: AsyncComponentSender<Self>) {
         // Don't hide controls if a popover is open
         if *self.active_popover_count.borrow() > 0 {
             debug!("Popover is open, keeping controls visible");
             return;
         }
-        // Only try to cancel timer if not called from the timer itself
-        if !from_timer
-            && let ControlState::Visible { timer_id } = &mut self.control_state
+        if let ControlState::Visible { timer_id } = &mut self.control_state
             && let Some(timer) = timer_id.take()
         {
             let _ = timer.remove();
@@ -112,25 +106,6 @@ impl PlayerPage {
             distance >= self.mouse_move_threshold
         } else {
             true // First movement always exceeds threshold
-        }
-    }
-
-    /// Check if mouse is over control widgets
-    pub(super) fn is_mouse_over_controls(&self, _x: f64, y: f64) -> bool {
-        // For now use the heuristic approach, but this should be replaced
-        // with actual widget bounds checking when controls_overlay is properly set
-        if let Some(controls) = &self.controls_overlay {
-            // Get the height of the controls overlay
-            let controls_height = controls.height() as f64;
-            let window_height = self.window.height() as f64;
-
-            // Check if y position is within control bounds
-            // Controls are at the bottom of the window
-            y >= (window_height - controls_height - 50.0) // Add some padding
-        } else {
-            // Fallback to heuristic: bottom 20% of window
-            let window_height = self.window.height() as f64;
-            y >= window_height * 0.8
         }
     }
 }
